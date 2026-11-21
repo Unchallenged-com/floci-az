@@ -24,6 +24,8 @@ discovery document and JWKS. This replaces the previous static, unsigned-token s
   v1.0 and v2.0 token shapes; `refresh_token` at the v2.0 token endpoint
 - **Azure-shaped errors**: token errors return `error`, `error_description` (with the `AADSTS`
   code), `error_codes`, `trace_id`, `correlation_id`, `timestamp`, and `error_uri`
+- **Sign-in logs**: every token request, successful or failed, and every authorize approval is recorded as a
+  sign-in, read through Microsoft Graph's `auditLogs/signIns` (see [Sign-in logs](graph.md#sign-in-logs))
 - **Dev seed**: a default tenant, a well-known dev app registration, a dev user and a dev group
 - **Permissive client authentication by default**: client secrets are not checked, so any
   `client_id` and `client_secret` get a token and `ClientSecretCredential` works with zero setup.

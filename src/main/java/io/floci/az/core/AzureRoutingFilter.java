@@ -500,10 +500,11 @@ public class AzureRoutingFilter {
 
     /**
      * Microsoft Graph API — a narrow slice at {@code /v1.0/...}: service principal discovery (used by
-     * the azurerm provider) plus group-membership management ({@code GraphServiceHandler}).
+     * the azurerm provider) plus group-membership management ({@code GraphServiceHandler}), and the beta
+     * sign-in log at {@code /beta/auditLogs/}, which no storage path can be (container names are lowercase).
      */
     private RouteOutcome routeMicrosoftGraph(RoutingContext ctx) {
-        if (!ctx.path().startsWith("v1.0/")) {
+        if (!ctx.path().startsWith("v1.0/") && !ctx.path().startsWith("beta/auditLogs/")) {
             return Fallthrough.TO_NEXT_STAGE;
         }
         return dispatchOrServiceDisabled(ctx, "graph", "graph", ctx.path());

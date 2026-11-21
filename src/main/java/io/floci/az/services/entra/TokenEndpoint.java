@@ -43,17 +43,19 @@ public class TokenEndpoint implements EntraEndpoint {
     private final EntraResponses responses;
     private final ClientAuthenticator authenticator;
     private final Map<String, GrantHandler> grants;
+    private final SignInRecorder signIns;
 
     @Inject
     public TokenEndpoint(EmulatorConfig config, DirectoryReader directory, IssuerFactory issuers,
                          EntraResponses responses, ClientAuthenticator authenticator,
-                         Instance<GrantHandler> grantHandlers) {
+                         Instance<GrantHandler> grantHandlers, SignInRecorder signIns) {
         this.config = config;
         this.directory = directory;
         this.issuers = issuers;
         this.responses = responses;
         this.authenticator = authenticator;
         this.grants = indexByGrantType(grantHandlers);
+        this.signIns = signIns;
     }
 
     private static Map<String, GrantHandler> indexByGrantType(Iterable<GrantHandler> handlers) {
@@ -94,12 +96,38 @@ public class TokenEndpoint implements EntraEndpoint {
             return responses.error(AadstsError.UNSUPPORTED_GRANT_TYPE, grantType);
         }
         ClientCredentials credentials = ClientCredentials.from(form, authorizationHeader(request));
+        TokenRequest tokenRequest = tokenRequest(request, form, credentials, new SignInAttempt(eventType(grantType)));
+        if ("password".equals(grantType)) {
+            tokenRequest.signIn().userPrincipalName(form.get("username"));
+        }
         Optional<ClientAuthenticator.Rejection> rejection =
                 authenticator.authenticate(credentials, request.tenant(), grant.requiresClientCredential());
-        if (rejection.isPresent()) {
-            return responses.error(rejection.get().error(), rejection.get().argArray());
+        Response response = rejection.isPresent()
+                ? responses.error(rejection.get().error(), rejection.get().argArray())
+                : grant.handle(tokenRequest);
+        signIns.record(request, tokenRequest.signIn(), tokenRequest.appId(), tokenRequest.clientObjectId(),
+                tokenRequest.scope(), clientCredentialType(credentials), SignInRecorder.DESKTOP_CLIENT, response);
+        return response;
+    }
+
+    /**
+     * The sign-in event type of a grant: a password is an authentication factor the user provides, so an interactive
+     * sign-in; a code or refresh token redeemed for the user is a non-interactive one; an app's own credential is a
+     * service principal sign-in.
+     */
+    private static String eventType(String grantType) {
+        return switch (grantType) {
+            case "password" -> SignIn.INTERACTIVE_USER;
+            case "client_credentials" -> SignIn.SERVICE_PRINCIPAL;
+            default -> SignIn.NON_INTERACTIVE_USER;
+        };
+    }
+
+    private static String clientCredentialType(ClientCredentials credentials) {
+        if (credentials.assertion()) {
+            return "clientAssertion";
         }
-        return grant.handle(tokenRequest(request, form, credentials));
+        return credentials.clientSecret() != null ? "clientSecret" : "none";
     }
 
     private static String authorizationHeader(EntraRequest request) {
@@ -107,7 +135,8 @@ public class TokenEndpoint implements EntraEndpoint {
         return headers == null ? null : headers.getHeaderString(HttpHeaders.AUTHORIZATION);
     }
 
-    private TokenRequest tokenRequest(EntraRequest request, Map<String, String> form, ClientCredentials credentials) {
+    private TokenRequest tokenRequest(EntraRequest request, Map<String, String> form, ClientCredentials credentials,
+                                      SignInAttempt signIn) {
         boolean v2 = request.path().endsWith(V2_PATH);
         String clientId = credentials.clientId();
         String scope = form.getOrDefault("scope", form.get("resource"));
@@ -125,6 +154,6 @@ public class TokenEndpoint implements EntraEndpoint {
         return new TokenRequest(form, request.tenantId(), directoryTenantId, request.baseUrl(), v2, clientId, appId,
                 clientObjectId, issuers.issuer(request.baseUrl(), request.tenantId(), v2), scope,
                 config.services().entra().tokenLifetimeSeconds(),
-                credentials.clientSecret() != null || credentials.assertion());
+                credentials.clientSecret() != null || credentials.assertion(), signIn);
     }
 }

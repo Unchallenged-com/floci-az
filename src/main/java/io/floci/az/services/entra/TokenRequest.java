@@ -17,11 +17,13 @@ import java.util.Map;
  * @param scope           {@code scope}, or the v1 {@code resource} when no scope was sent
  * @param lifetimeSeconds the access token lifetime
  * @param clientCredentialPresent whether the form or Basic header supplied a secret or assertion
+ * @param signIn          the sign-in being served, which the grant tells who signs in
  */
 public record TokenRequest(Map<String, String> form, String tenantId, String directoryTenantId, String baseUrl,
                            boolean v2,
                            String clientId, String appId, String clientObjectId, String issuer,
-                           String scope, long lifetimeSeconds, boolean clientCredentialPresent) {
+                           String scope, long lifetimeSeconds, boolean clientCredentialPresent,
+                           SignInAttempt signIn) {
 
     /** The {@code ver} claim: {@code "2.0"} or {@code "1.0"}. */
     public String tokenVersion() {

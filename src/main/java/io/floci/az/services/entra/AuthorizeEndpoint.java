@@ -32,12 +32,15 @@ public class AuthorizeEndpoint implements EntraEndpoint {
     private final EntraStore store;
     private final DirectoryReader directory;
     private final EntraResponses responses;
+    private final SignInRecorder signIns;
 
     @Inject
-    public AuthorizeEndpoint(EntraStore store, DirectoryReader directory, EntraResponses responses) {
+    public AuthorizeEndpoint(EntraStore store, DirectoryReader directory, EntraResponses responses,
+                             SignInRecorder signIns) {
         this.store = store;
         this.directory = directory;
         this.responses = responses;
+        this.signIns = signIns;
     }
 
     @Override
@@ -88,9 +91,17 @@ public class AuthorizeEndpoint implements EntraEndpoint {
                 user.id(), params.get("nonce"), params.get("state"),
                 Instant.now().plusSeconds(300)));
 
-        return Response.status(Response.Status.FOUND)
+        Response approval = Response.status(Response.Status.FOUND)
                 .location(URI.create(buildRedirect(redirectUri, responseMode, code, params.get("state"))))
                 .build();
+        // The approval stands in for the user signing in at the sign-in page: the interactive sign-in of the flow.
+        SignInAttempt attempt = new SignInAttempt(SignIn.INTERACTIVE_USER);
+        attempt.user(user);
+        signIns.record(request, attempt, clientId,
+                directory.servicePrincipalByAppId(directoryTenantId, clientId)
+                        .map(DirectoryReader.DirectoryServicePrincipal::id).orElse(null),
+                params.get("scope"), "none", SignInRecorder.BROWSER, approval);
+        return approval;
     }
 
     /** Appends {@code code} and {@code state} as a query string ({@code response_mode=query}, the default) or fragment. */

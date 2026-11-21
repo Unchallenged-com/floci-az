@@ -9,6 +9,7 @@ import io.floci.az.core.directory.AzureDirectory;
 import io.floci.az.services.entra.DirectoryEntitySet;
 import io.floci.az.services.entra.DirectoryReader;
 import io.floci.az.services.entra.GraphDirectoryStore;
+import io.floci.az.services.entra.SignInLog;
 import io.floci.az.services.entra.TenantRef;
 import io.floci.az.services.entra.TenantResolver;
 import jakarta.ws.rs.core.Response;
@@ -45,7 +46,7 @@ class GraphGroupContextTest {
         when(services.entra()).thenReturn(entra);
         when(entra.defaultTenantId()).thenReturn(tenantId);
         GraphServiceHandler handler = new GraphServiceHandler(config, store,
-                mock(DirectoryReader.class), tenants, azureDirectory);
+                mock(DirectoryReader.class), tenants, azureDirectory, new SignInLog());
 
         for (boolean expand : List.of(false, true)) {
             Map<String, String> query = expand ? Map.of("$expand", "members") : Map.of();

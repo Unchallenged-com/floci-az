@@ -26,6 +26,9 @@ group) is available here too.
 | `GET /v1.0/applications/{id}/owners` | The registration's owners, typed `#microsoft.graph.user` or `#microsoft.graph.servicePrincipal` |
 | `POST /v1.0/applications/{id}/owners/$ref` | Add an owner from `{"@odata.id": ".../directoryObjects/{id}"}`; a user or service principal of the tenant |
 | `DELETE /v1.0/applications/{id}/owners/{id}/$ref` | Remove an owner |
+| `GET /v1.0/auditLogs/signIns` | The tenant's interactive user sign-ins, newest first (see [Sign-in logs](#sign-in-logs)) |
+| `GET /beta/auditLogs/signIns` | The same, plus non-interactive user and service principal sign-ins through `signInEventTypes` |
+| `GET /{v1.0\|beta}/auditLogs/signIns/{id}` | One sign-in |
 
 `{id}` in `users/{id}` accepts either the user's object id or its userPrincipalName, as real Graph
 does. Only **direct** membership is modeled: there is no nested-group transitivity.
@@ -86,6 +89,52 @@ curl -s -X DELETE \
 
 Both return `204 No Content` on success; a group id that doesn't exist returns
 `404 Request_ResourceNotFound`.
+
+## Sign-in logs
+
+Every request the [Entra token endpoint](entra.md) answers, and every approval of its authorize endpoint, leaves
+one [`signIn`](https://learn.microsoft.com/en-us/graph/api/resources/signin) in the tenant's sign-in log, a
+failure as well as a success: a failed request carries the `AADSTS` code of its error in `status.errorCode` and
+its message in `status.failureReason` (`50126` "Error validating credentials due to invalid username or
+password.", `7000215` for a wrong client secret), a success `errorCode` `0`.
+
+| Request | Sign-in event type | `isInteractive` | `clientAppUsed` |
+|---|---|---|---|
+| Authorize approval (`/oauth2/v2.0/authorize`) | `interactiveUser` | `true` | `Browser` |
+| `grant_type=password` | `interactiveUser` | `true` | `Mobile Apps and Desktop clients` |
+| `grant_type=authorization_code`, `refresh_token` | `nonInteractiveUser` | `false` | `Mobile Apps and Desktop clients` |
+| `grant_type=client_credentials` | `servicePrincipal` | `false` | `Mobile Apps and Desktop clients` |
+
+As on Azure, `GET /v1.0/auditLogs/signIns` lists the interactive user sign-ins only, and the beta endpoint lists the
+others when asked with `signInEventTypes/any(t: t eq 'nonInteractiveUser')` (`interactiveUser`,
+`nonInteractiveUser`, `servicePrincipal`, joined with `or`). Beta records add `signInEventTypes`,
+`servicePrincipalId` and `servicePrincipalName` (service principal sign-ins), `clientCredentialType`
+(`clientSecret`, `clientAssertion` or `none`), `homeTenantId`, `resourceTenantId`, `userType` and
+`crossTenantAccessType`.
+
+- **Who**: `userId`, `userDisplayName` and `userPrincipalName` (lowercased, as Azure stores it) of the directory
+  user the grant resolved; a password sign-in for a name the directory does not hold keeps the name it was tried
+  with. `appId` and `appDisplayName` name the client.
+- **Where**: `ipAddress` is the address the request came from; `correlationId` is the `client-request-id` header
+  MSAL and the Azure SDKs send, or a new GUID.
+- **What**: `resourceId` and `resourceDisplayName` name Microsoft Graph, or an application of the directory
+  addressed by its application id or `api://{appId}`; any other resource is reported as `null`.
+- **Query**: `$filter` takes `createdDateTime` with `ge`, `le` and `eq`; `eq` on `id`, `userId`,
+  `userPrincipalName`, `userDisplayName`, `appId`, `appDisplayName`, `ipAddress`, `correlationId`,
+  `clientAppUsed`, `resourceId`, `resourceDisplayName`, `conditionalAccessStatus` and `status/errorCode`;
+  `startsWith` on `appDisplayName`, `userPrincipalName`, `userDisplayName` and `ipAddress`; joined with `and`.
+  String comparisons ignore case. `$orderby=createdDateTime asc|desc` (newest first by default), `$top` up to
+  1,000 (the default), and an `@odata.nextLink` with an opaque `$skiptoken`. Anything else answers
+  `400 Request_BadRequest`.
+- **Not modelled**: Conditional Access (`conditionalAccessStatus` is `notApplied`, no applied policies), risk (every
+  risk property `none`), device and location details (`null`), managed identity sign-ins, and the beta
+  `authenticationProtocol`, `incomingTokenType` and `uniqueTokenIdentifier`. The log is kept in memory, the last
+  10,000 sign-ins, and emptied by `POST /_admin/reset`; reading it requires no `AuditLog.Read.All` permission.
+
+```bash
+curl -sG http://localhost:4577/beta/auditLogs/signIns \
+  --data-urlencode "\$filter=signInEventTypes/any(t: t eq 'servicePrincipal') and status/errorCode eq 7000215"
+```
 
 ## Configuration
 

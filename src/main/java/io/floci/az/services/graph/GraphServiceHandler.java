@@ -14,6 +14,7 @@ import io.floci.az.services.entra.DirectoryReader.DirectoryGroup;
 import io.floci.az.services.entra.DirectoryReader.DirectoryServicePrincipal;
 import io.floci.az.services.entra.DirectoryReader.DirectoryUser;
 import io.floci.az.services.entra.GraphDirectoryStore;
+import io.floci.az.services.entra.SignInLog;
 import io.floci.az.services.entra.TenantResolver;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -61,9 +62,12 @@ public class GraphServiceHandler implements AzureServiceHandler {
     private final ObjectMapper mapper = new ObjectMapper();
     private final SecureRandom random = new SecureRandom();
 
+    private final SignInLog signIns;
+
     @Inject
     public GraphServiceHandler(EmulatorConfig config, GraphDirectoryStore store, DirectoryReader directory,
-                               TenantResolver tenants, AzureDirectory azureDirectory) {
+                               TenantResolver tenants, AzureDirectory azureDirectory, SignInLog signIns) {
+        this.signIns = signIns;
         this.config = config;
         this.store = store;
         this.directory = directory;
@@ -83,6 +87,10 @@ public class GraphServiceHandler implements AzureServiceHandler {
         String path = stripSlashes(request.resourcePath());
         LOG.infof("GraphService: %s %s", request.method(), path);
 
+        Response auditLogs = auditLogs(request, path);
+        if (auditLogs != null) {
+            return auditLogs;
+        }
         if (!path.startsWith("v1.0/")) {
             return notFound("Unsupported Graph endpoint: " + path);
         }
@@ -124,6 +132,27 @@ public class GraphServiceHandler implements AzureServiceHandler {
     }
 
     // ── Endpoints ────────────────────────────────────────────────────────────────
+
+    /**
+     * {@code /{v1.0|beta}/auditLogs/signIns[/{id}]}, the one beta path served, since the non-interactive and service
+     * principal sign-ins are only listed there; null for any other path.
+     */
+    private Response auditLogs(AzureRequest request, String path) {
+        String[] segments = path.split("/");
+        if (segments.length < 3 || segments.length > 4 || !"auditLogs".equals(segments[1])
+                || !"signIns".equals(segments[2]) || !("v1.0".equals(segments[0]) || "beta".equals(segments[0]))) {
+            return null;
+        }
+        if (!"GET".equals(request.method())) {
+            return methodNotAllowed();
+        }
+        GraphSignIns endpoint = new GraphSignIns(signIns, graphRoot(request), segments[0]);
+        GraphSignIns.Outcome outcome = segments.length == 4
+                ? endpoint.get(tenantId(), segments[3])
+                : endpoint.list(tenantId(), request.queryParams());
+        return outcome.body() != null ? json(outcome.body())
+                : graphError(outcome.status(), outcome.errorCode(), outcome.message());
+    }
 
     private Response listGroups(AzureRequest request) {
         Predicate<DirectoryObject> filter;
@@ -289,9 +318,14 @@ public class GraphServiceHandler implements AzureServiceHandler {
 
     /** The {@code v1.0} base of the Graph endpoint of the request's cloud, for {@code @odata.context} values. */
     private static String graphBase(AzureRequest request) {
+        return graphRoot(request) + "/v1.0/";
+    }
+
+    /** The Graph endpoint of the request's cloud, without a version. */
+    private static String graphRoot(AzureRequest request) {
         CloudProfile cloud = request.scope() == null
             ? CloudCatalog.forNameOrPublic(CloudCatalog.PUBLIC_CLOUD) : request.scope().cloud();
-        return cloud.endpoints().microsoftGraph() + "/v1.0/";
+        return cloud.endpoints().microsoftGraph();
     }
 
     private static String stripSlashes(String path) {

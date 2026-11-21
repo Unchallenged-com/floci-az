@@ -66,6 +66,7 @@ public class RefreshTokenGrant implements GrantHandler {
         }
         String scope = request.scope() == null || request.scope().isBlank() ? grant.scope() : request.scope();
         DirectoryUser user = directory.user(grant.directoryTenantId(), grant.userObjectId()).orElse(null);
+        request.signIn().user(user);
         if (user == null || (config.services().entra().validateUserCredentials()
                 && (!user.accountEnabled() || user.passwordChangeRequired()))) {
             return responses.error(AadstsError.REFRESH_TOKEN_INVALID);

@@ -76,6 +76,7 @@ public class AuthorizationCodeGrant implements GrantHandler {
             return responses.error(AadstsError.PKCE_MISMATCH);
         }
         DirectoryUser user = directory.user(request.directoryTenantId(), authCode.userObjectId()).orElse(null);
+        request.signIn().user(user);
         if (user == null) {
             return responses.error(AadstsError.CODE_UNKNOWN_USER);
         }

@@ -48,6 +48,7 @@ public class PasswordGrant implements GrantHandler {
         }
         String username = request.form().getOrDefault("username", EntraStore.DEV_USER_UPN);
         DirectoryUser user = directory.userByPrincipalName(request.directoryTenantId(), username).orElse(null);
+        request.signIn().user(user);
         if (enforced && (!request.tenantId().equals(request.directoryTenantId())
                 || user == null || !directory.userPasswordMatches(request.directoryTenantId(), user.id(),
                 request.form().get("password")))) {
