@@ -79,7 +79,8 @@ public record ActivityLogEvent(String eventDataId, String operationId, String co
         put(json, select, "status", localizable(status, status));
         put(json, select, "subStatus", localizable(subStatus, subStatusText(subStatus)));
         put(json, select, "submissionTimestamp", submissionTimestamp.toString());
-        put(json, select, "subscriptionId", subscriptionId);
+        // A tenant-level entry names no subscription, which the API writes as an empty string.
+        put(json, select, "subscriptionId", subscriptionId == null ? "" : subscriptionId);
         put(json, select, "tenantId", tenantId);
         return json;
     }

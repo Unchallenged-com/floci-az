@@ -89,7 +89,11 @@ public class ActivityLogRule implements ArmRequestRule {
             succeeded ? "Informational" : "Error", properties));
     }
 
-    /** Writes, deletes and actions on provider resources and on resource groups; never reads or listings. */
+    /**
+     * Writes, deletes and actions on provider resources and on resource groups, in a subscription or outside any
+     * (management groups and the resources they or the tenant root carry, which the tenant log holds); never reads
+     * or listings.
+     */
     static boolean isLogged(ArmCall call) {
         ArmResourceId id = call.id();
         if (id == null || call.method() == null) {
@@ -99,13 +103,13 @@ public class ActivityLogRule implements ArmRequestRule {
             case "PUT", "PATCH", "DELETE", "POST" -> true;
             default -> false;
         };
-        if (!mutation || id.subscriptionId() == null) {
+        if (!mutation) {
             return false;
         }
         if (id.providerNamespace() != null) {
             return !id.types().isEmpty() && (!id.isCollection() || "POST".equals(call.method()));
         }
-        return id.resourceGroup() != null && id.types().size() <= 1;
+        return id.subscriptionId() != null && id.resourceGroup() != null && id.types().size() <= 1;
     }
 
     /** The operation ARM names: {@code {type}/write}, {@code {type}/delete} or {@code {type}/{action}/action}. */

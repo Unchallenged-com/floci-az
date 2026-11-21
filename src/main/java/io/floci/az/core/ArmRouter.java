@@ -9,6 +9,7 @@ import io.floci.az.core.cloud.ScopeResolver;
 import io.floci.az.services.arm.ArmHandler;
 import io.floci.az.services.keyvault.KeyVaultArmService;
 import io.floci.az.services.monitor.MonitorHandler;
+import io.floci.az.services.monitor.activitylog.ActivityLogScope;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -299,7 +300,7 @@ public class ArmRouter {
     RouteOutcome routeMonitor(RoutingContext ctx) {
         boolean diagnosticSettings = MonitorHandler.isDiagnosticSettingsPath(ctx.path());
         if (!ctx.path().startsWith("dataCollectionRules/") && !ctx.path().startsWith("v1/workspaces/")
-                && !diagnosticSettings) {
+                && !diagnosticSettings && ActivityLogScope.outsideSubscriptions(ctx.path()).isEmpty()) {
             return Fallthrough.TO_NEXT_STAGE;
         }
         return dispatcher.dispatchOrServiceDisabled(ctx, "monitor", "monitor", ctx.path(),

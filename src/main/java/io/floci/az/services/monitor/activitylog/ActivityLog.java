@@ -56,17 +56,14 @@ public class ActivityLog implements Resettable {
     }
 
     /**
-     * The entries of a subscription that satisfy {@code filter}, newest first, as the API lists them;
-     * {@code before} limits them to entries recorded before that sequence number, so that a page cursor
-     * stays stable while new entries arrive.
+     * The entries that satisfy {@code filter}, newest first, as the API lists them; {@code before} limits them to
+     * entries recorded before that sequence number, so that a page cursor stays stable while new entries arrive.
      */
-    public synchronized List<Entry> query(String subscriptionId, Predicate<ActivityLogEvent> filter, long before) {
+    public synchronized List<Entry> query(Predicate<ActivityLogEvent> filter, long before) {
         List<Entry> out = new ArrayList<>();
         for (Entry entry : events) {
             ActivityLogEvent event = entry.event();
-            if (entry.sequence() < before
-                    && (subscriptionId == null || subscriptionId.equalsIgnoreCase(event.subscriptionId()))
-                    && filter.test(event)) {
+            if (entry.sequence() < before && filter.test(event)) {
                 out.add(entry);
             }
         }

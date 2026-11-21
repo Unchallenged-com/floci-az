@@ -140,8 +140,8 @@ name is matched with or without the `Custom-` prefix and the `_CL` suffix used b
 
 `GET /subscriptions/{sub}/providers/Microsoft.Insights/eventtypes/management/values` serves the
 subscription Activity Log the way the Activity Logs list operation does. Every management-plane PUT,
-PATCH, DELETE and POST action on an existing subscription is recorded as an `Administrative`
-entry: a `BeginRequest` entry with status `Started` when the request enters, and an `EndRequest`
+PATCH, DELETE and POST action on an existing subscription, or outside any subscription (see below), is
+recorded as an `Administrative` entry: a `BeginRequest` entry with status `Started` when the request enters, and an `EndRequest`
 entry with `Succeeded` or `Failed`, the HTTP status word as `subStatus` and `properties.statusCode`,
 when the request is answered. A write the ARM request gate refuses before its handler runs (an
 invalid or taken name, a missing resource group, a policy deny) is logged as `Failed` at `Error`
@@ -157,6 +157,18 @@ the resource's id, type, provider, group and subscription. Operation names follo
 ```bash
 curl -s "http://localhost:4577/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.Insights/eventtypes/management/values?api-version=2015-04-01&\$filter=eventTimestamp%20ge%20'2026-01-01T00:00:00Z'%20and%20resourceGroupName%20eq%20'rg1'" | jq .
 ```
+
+Writes outside any subscription, to management groups and to the resources the tenant root or a management group
+carries (role and policy assignments at those scopes, a subscription moved into a group), are recorded the same
+way, with an empty `subscriptionId`, and listed by the two other forms of the list operation:
+
+- **Tenant**: `GET /providers/Microsoft.Insights/eventtypes/management/values` lists every entry generated outside a
+  subscription, and none of the subscriptions' own, as the Tenant Activity Logs operation does.
+- **Management group**: `GET /providers/Microsoft.Management/managementGroups/{groupId}/providers/Microsoft.Insights/eventtypes/management/values`
+  (the `2017-03-01-preview` form) lists the tenant entries scoped to that group: the group itself and the resources
+  under its id.
+
+Both take the same `$filter`, `$select` and paging as the subscription list.
 
 - **`$filter`** (required) takes `eventTimestamp ge '...'` plus `eventTimestamp le`, `resourceGroupName eq`,
   `resourceUri eq` / `resourceId eq`, `resourceProvider eq`, `correlationId eq`, `eventChannels eq`,
@@ -229,8 +241,8 @@ restarts in `persistent`/`hybrid`/`wal` modes.
   filtering.
 - **The Activity Log is in memory** (`activity-log.capacity` entries, default 10000, `0` keeps none) and covers the
   management plane only: no `ServiceHealth`, `Alert`, `Autoscale`, `Security` or `Recommendation`
-  categories, no tenant-level log (`/providers/Microsoft.Insights/eventtypes/management/values` without a
-  subscription), and `authorization.role` is not reported.
+  categories, and `authorization.role` is not reported. The tenant and management-group lists accept the whole
+  subscription `$filter` grammar, where Azure documents a narrower one for the tenant list.
 - **Metrics are out of scope.** Only the logs surface (ingestion + Log Analytics query) is emulated;
   `Microsoft.Insights/metrics`, alerts, action groups, and autoscale are not.
 - **Auth is permissive.** Bearer tokens are accepted but not validated (dev mode), matching the rest

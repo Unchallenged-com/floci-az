@@ -21,7 +21,9 @@ import java.util.function.Predicate;
 
 /**
  * {@code GET /subscriptions/{sub}/providers/Microsoft.Insights/eventtypes/management/values}: the Activity
- * Logs list operation, with its {@code $filter} grammar, {@code $select} projection and {@code nextLink}
+ * Logs list operation, and its tenant ({@code /providers/Microsoft.Insights/eventtypes/management/values}) and
+ * management-group ({@code /providers/Microsoft.Management/managementGroups/{id}/providers/...}) forms, which
+ * list the entries generated outside any subscription, with its {@code $filter} grammar, {@code $select} projection and {@code nextLink}
  * paging through an opaque {@code $skiptoken} that names the entry the previous page ended on, so a
  * page stays stable while writes keep adding entries. Errors use this API's own flat {@code ErrorResponse}
  * ({@code {"code": ..., "message": ...}}), not ARM's {@code error} wrapper.
@@ -57,7 +59,7 @@ public class ActivityLogEndpoint {
         return resource.endsWith(PATH_MARKER.substring(1)) || resource.endsWith(PATH_MARKER);
     }
 
-    public Response list(AzureRequest req, String subscriptionId) {
+    public Response list(AzureRequest req, ActivityLogScope scope) {
         if (!"GET".equalsIgnoreCase(req.method())) {
             return error(405, "MethodNotAllowed",
                 "The requested resource does not support http method '" + req.method() + "'.");
@@ -79,7 +81,7 @@ public class ActivityLogEndpoint {
             }
             before = cursor;
         }
-        List<ActivityLog.Entry> entries = log.query(subscriptionId, filter, before);
+        List<ActivityLog.Entry> entries = log.query(scope.holds().and(filter), before);
         int to = Math.min(pageSize, entries.size());
         List<Map<String, Object>> value = new ArrayList<>();
         for (ActivityLog.Entry entry : entries.subList(0, to)) {
@@ -88,7 +90,7 @@ public class ActivityLogEndpoint {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("value", value);
         if (to < entries.size()) {
-            body.put("nextLink", nextLink(req, subscriptionId, entries.get(to - 1).sequence()));
+            body.put("nextLink", nextLink(req, scope, entries.get(to - 1).sequence()));
         }
         return Response.ok(body).build();
     }
@@ -105,10 +107,10 @@ public class ActivityLogEndpoint {
         return out;
     }
 
-    private static String nextLink(AzureRequest req, String subscriptionId, long lastSequence) {
+    private static String nextLink(AzureRequest req, ActivityLogScope scope, long lastSequence) {
         String base = (req.secure() ? "https://" : "http://") + (req.authority() == null ? req.host() : req.authority());
         StringBuilder link = new StringBuilder(base == null || base.endsWith("//") ? "" : base);
-        link.append("/subscriptions/").append(subscriptionId).append("/providers/microsoft.insights/eventtypes/management/values");
+        link.append(scope.path());
         link.append("?api-version=").append(req.queryParams().getOrDefault("api-version", "2015-04-01"));
         for (String param : List.of("$filter", "$select")) {
             String value = req.queryParams().get(param);

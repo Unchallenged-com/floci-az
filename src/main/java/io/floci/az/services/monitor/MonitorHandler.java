@@ -22,6 +22,7 @@ import io.floci.az.core.storage.StorageFactory;
 import io.floci.az.services.monitor.MonitorModels.DeletedWorkspace;
 import io.floci.az.services.monitor.MonitorModels.MonitorResource;
 import io.floci.az.services.monitor.activitylog.ActivityLogEndpoint;
+import io.floci.az.services.monitor.activitylog.ActivityLogScope;
 import io.quarkus.runtime.configuration.MemorySize;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -178,6 +179,14 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
             return handleQuery(request);
         }
 
+        Optional<ActivityLogScope> activityLogScope = ActivityLogScope.outsideSubscriptions(path);
+        if (activityLogScope.isPresent()) {
+            if (!config.services().monitor().activityLog().enabled()) {
+                return Response.status(404).entity("Provider resource not found").build();
+            }
+            return activityLog.list(request, activityLogScope.get());
+        }
+
         // ARM-plane calls routed via AzureRoutingFilter with serviceType=monitor
         if (isDiagnosticSettingsPath(path)) {
             return handleDiagnosticSettingsArm(request, path, method.toUpperCase());
@@ -208,7 +217,7 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
             if (!config.services().monitor().activityLog().enabled()) {
                 return Response.status(404).entity("Provider resource not found").build();
             }
-            return activityLog.list(req, sub);
+            return activityLog.list(req, ActivityLogScope.subscription(sub));
         }
         Matcher collection = COLLECTION_PATTERN.matcher(path);
         if (collection.matches()) {
