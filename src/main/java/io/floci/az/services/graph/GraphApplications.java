@@ -63,9 +63,12 @@ final class GraphApplications {
     private final SecureRandom random;
     private final String baseContext;
     private final String tenantId;
+    private final DirectoryAuditor audit;
 
     /** {@code random} is the handler's, created at runtime: a native image must not carry a seeded generator in its heap. */
-    GraphApplications(GraphDirectoryStore store, ObjectMapper mapper, SecureRandom random, String baseContext, String tenantId) {
+    GraphApplications(GraphDirectoryStore store, ObjectMapper mapper, SecureRandom random, String baseContext, String tenantId,
+                      DirectoryAuditor audit) {
+        this.audit = audit;
         this.store = store;
         this.mapper = mapper;
         this.random = random;
@@ -176,19 +179,28 @@ final class GraphApplications {
             }
             store.addLink(tenantId, app.id(), GraphDirectoryStore.OWNERS, canonicalId);
         }
+        owner(canonicalId).ifPresent(owner -> audit.addOwner(app, owner));
         return Response.status(204).build();
     }
 
     private Response removeOwner(DirectoryObject app, String ownerId) {
+        String removed;
         synchronized (store) {
             Optional<String> owner = store.links(tenantId, app.id(), GraphDirectoryStore.OWNERS).stream()
                 .filter(ownerId::equalsIgnoreCase).findFirst();
             if (owner.isEmpty()) {
                 return notFound(ownerId);
             }
-            store.removeLink(tenantId, app.id(), GraphDirectoryStore.OWNERS, owner.get());
+            removed = owner.get();
+            store.removeLink(tenantId, app.id(), GraphDirectoryStore.OWNERS, removed);
         }
+        owner(removed).ifPresent(principal -> audit.removeOwner(app, principal));
         return Response.status(204).build();
+    }
+
+    /** The user or service principal an owner link names. */
+    private Optional<DirectoryObject> owner(String id) {
+        return byId(DirectoryEntitySet.USERS, id).or(() -> byId(DirectoryEntitySet.SERVICE_PRINCIPALS, id));
     }
 
     /** An object by id, which Graph compares without regard to the casing of the GUID. */
@@ -323,12 +335,18 @@ final class GraphApplications {
         String objectId = UUID.randomUUID().toString();
         DirectoryObject app = GraphDirectoryStore.application(tenantId, objectId, appId, name, List.of());
         writeProperties(app.props(), body);
+        DirectoryObject sp = GraphDirectoryStore.servicePrincipal(tenantId, TokenIssuer.deterministicGuid("sp:" + appId), appId, name);
         synchronized (store) {
             store.put(app);
-            store.put(GraphDirectoryStore.servicePrincipal(tenantId, TokenIssuer.deterministicGuid("sp:" + appId), appId, name));
+            store.put(sp);
             for (String owner : owners) {
                 store.addLink(tenantId, objectId, GraphDirectoryStore.OWNERS, owner);
             }
+        }
+        audit.addApplication(app);
+        audit.addServicePrincipal(sp);
+        for (String owner : owners) {
+            owner(owner).ifPresent(o -> audit.addOwner(app, o));
         }
         return Response.status(201).entity(write(application(app, true))).type(MediaType.APPLICATION_JSON).build();
     }
@@ -346,8 +364,16 @@ final class GraphApplications {
             return graphError(400, "Request_BadRequest", "Property '" + readOnly.get() + "' is read-only and cannot be set.");
         }
         // Graph semantics: the properties named are replaced, the rest of the object is kept.
-        Optional<DirectoryObject> updated = update(app.id(), current -> writeProperties(current, body));
-        return updated.isEmpty() ? notFound(app.id()) : Response.status(204).build();
+        String[] before = new String[1];
+        Optional<DirectoryObject> updated = update(app.id(), current -> {
+            before[0] = textOrNull(current, "displayName");
+            writeProperties(current, body);
+        });
+        if (updated.isEmpty()) {
+            return notFound(app.id());
+        }
+        audit.updateApplication(before[0], updated.get());
+        return Response.status(204).build();
     }
 
     private Response addPassword(AzureRequest request, DirectoryObject app) {
@@ -383,10 +409,15 @@ final class GraphApplications {
         credential.put("startDateTime", start.toString());
         credential.put("endDateTime", end.toString());
         credential.put(GraphDirectoryStore.SECRET_TEXT, secret); // hashed by the store on write
-        Optional<DirectoryObject> updated = update(app.id(), current -> credentials(current).add(credential));
+        JsonNode[] before = new JsonNode[1];
+        Optional<DirectoryObject> updated = update(app.id(), current -> {
+            before[0] = credentials(current).deepCopy();
+            credentials(current).add(credential);
+        });
         if (updated.isEmpty()) {
             return notFound(app.id());
         }
+        audit.secrets(updated.get(), before[0], updated.get().props().get(GraphDirectoryStore.PASSWORD_CREDENTIALS));
         Map<String, Object> response = passwordCredential(credential);
         response.put("secretText", secret);
         response.put("@odata.context", baseContext + "$metadata#microsoft.graph.passwordCredential");
@@ -399,8 +430,10 @@ final class GraphApplications {
             return graphError(400, "Request_BadRequest", "A keyId is required.");
         }
         boolean[] removed = {false};
+        JsonNode[] before = new JsonNode[1];
         Optional<DirectoryObject> updated = update(app.id(), current -> {
             ArrayNode credentials = credentials(current);
+            before[0] = credentials.deepCopy();
             for (int i = credentials.size() - 1; i >= 0; i--) {
                 if (keyId.equalsIgnoreCase(textOrNull(credentials.get(i), "keyId"))) {
                     credentials.remove(i);
@@ -414,15 +447,19 @@ final class GraphApplications {
         if (!removed[0]) {
             return graphError(404, "Request_ResourceNotFound", "No password credential found with key id '" + keyId + "'.");
         }
+        audit.secrets(updated.get(), before[0], updated.get().props().get(GraphDirectoryStore.PASSWORD_CREDENTIALS));
         return Response.status(204).build();
     }
 
     private Response delete(DirectoryObject app) {
+        Optional<DirectoryObject> sp;
         synchronized (store) {
             store.delete(tenantId, DirectoryEntitySet.APPLICATIONS, app.id()); // drops its owner links too
-            store.findByAlternateKey(tenantId, DirectoryEntitySet.SERVICE_PRINCIPALS, "appId", app.text("appId"))
-                .ifPresent(sp -> store.delete(tenantId, DirectoryEntitySet.SERVICE_PRINCIPALS, sp.id()));
+            sp = store.findByAlternateKey(tenantId, DirectoryEntitySet.SERVICE_PRINCIPALS, "appId", app.text("appId"));
+            sp.ifPresent(principal -> store.delete(tenantId, DirectoryEntitySet.SERVICE_PRINCIPALS, principal.id()));
         }
+        audit.deleteApplication(app);
+        sp.ifPresent(audit::removeServicePrincipal);
         return Response.status(204).build();
     }
 

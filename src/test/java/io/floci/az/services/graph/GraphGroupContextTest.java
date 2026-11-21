@@ -45,7 +45,7 @@ class GraphGroupContextTest {
         when(services.entra()).thenReturn(entra);
         when(entra.defaultTenantId()).thenReturn(tenantId);
         GraphServiceHandler handler = new GraphServiceHandler(config, store,
-                mock(DirectoryReader.class), tenants, azureDirectory);
+                mock(DirectoryReader.class), tenants, azureDirectory, new DirectoryAuditLog());
 
         for (boolean expand : List.of(false, true)) {
             Map<String, String> query = expand ? Map.of("$expand", "members") : Map.of();

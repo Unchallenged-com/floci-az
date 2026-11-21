@@ -26,6 +26,8 @@ group) is available here too.
 | `GET /v1.0/applications/{id}/owners` | The registration's owners, typed `#microsoft.graph.user` or `#microsoft.graph.servicePrincipal` |
 | `POST /v1.0/applications/{id}/owners/$ref` | Add an owner from `{"@odata.id": ".../directoryObjects/{id}"}`; a user or service principal of the tenant |
 | `DELETE /v1.0/applications/{id}/owners/{id}/$ref` | Remove an owner |
+| `GET /v1.0/auditLogs/directoryAudits` | The tenant's directory audit log, newest first (see [Directory audit logs](#directory-audit-logs)) |
+| `GET /v1.0/auditLogs/directoryAudits/{id}` | One audit entry |
 
 `{id}` in `users/{id}` accepts either the user's object id or its userPrincipalName, as real Graph
 does. Only **direct** membership is modeled: there is no nested-group transitivity.
@@ -86,6 +88,53 @@ curl -s -X DELETE \
 
 Both return `204 No Content` on success; a group id that doesn't exist returns
 `404 Request_ResourceNotFound`.
+
+## Directory audit logs
+
+Every directory change this Graph slice makes leaves a
+[`directoryAudit`](https://learn.microsoft.com/en-us/graph/api/resources/directoryaudit) entry, named as the
+[Entra audit activity reference](https://learn.microsoft.com/en-us/entra/identity/monitoring-health/reference-audit-activities)
+names it under `Core Directory`:
+
+| Request | Activity | Category | `operationType` |
+|---|---|---|---|
+| `POST /applications` | `Add application`, `Add service principal`, and `Add owner to application` for each owner | `ApplicationManagement` | `Add`, `Add`, `Assign` |
+| `PATCH /applications/{id}` | `Update application` | `ApplicationManagement` | `Update` |
+| `POST .../addPassword`, `.../removePassword` | `Update application - Certificates and secrets management` | `ApplicationManagement` | `Update` |
+| `DELETE /applications/{id}` | `Delete application`, `Remove service principal` | `ApplicationManagement` | `Delete` |
+| `POST .../owners/$ref`, `DELETE .../owners/{id}/$ref` | `Add owner to application`, `Remove owner from application` | `ApplicationManagement` | `Assign`, `Unassign` |
+| `POST /groups/{id}/members/$ref`, `DELETE .../members/{id}/$ref` | `Add member to group`, `Remove member from group` | `GroupManagement` | `Assign`, `Unassign` |
+
+- **Who**: `initiatedBy.user` (`id`, `displayName`, `userPrincipalName`, `ipAddress`) for a user's token,
+  `initiatedBy.app` (`appId`, `displayName`, `servicePrincipalId`) for an application's; both `null` for a request
+  without a token. The entries one request writes share its `correlationId`.
+- **What**: `targetResources` names the objects changed, with `modifiedProperties` in the encoding Entra writes:
+  - an object's own properties as JSON arrays (`AppId`, `DisplayName`, and `AccountEnabled`, `AppPrincipalId`,
+    `ServicePrincipalName` for a service principal; `"[]"` when there was none), followed by
+    `Included Updated Properties`;
+  - a client secret change as `KeyDescription`, the registration's secrets before and after, each
+    `[KeyIdentifier={keyId},KeyType=Password,KeyUsage=Verify,DisplayName={displayName}]`;
+  - an owner or member entry on the principal added or removed (`User`, `Group` or `ServicePrincipal`, listed
+    first), with `Application.DisplayName`, or `Group.ObjectID` and `Group.DisplayName`, as JSON strings: in
+    `newValue` for an addition, `oldValue` for a removal. The application or group follows as a second target.
+- **Details**: `additionalDetails` carries the request's `User-Agent` and the `AppId` of the application the
+  entry is about.
+- **Ids**: `Directory_{correlationId}_{suffix}_{number}`, the form Core Directory gives its entries.
+- **Query**: `$filter` takes `activityDateTime` with `ge`, `le` and `eq`; `eq` on `id`, `activityDisplayName`,
+  `correlationId`, `loggedByService`, `initiatedBy/user/id`, `initiatedBy/user/displayName`,
+  `initiatedBy/user/userPrincipalName`, `initiatedBy/app/appId` and `initiatedBy/app/displayName`; `startswith` on
+  `activityDisplayName` and `initiatedBy/user/userPrincipalName`; `targetResources/any(t: t/id eq '...')`,
+  `t/displayName eq` and `startswith(t/displayName,'...')`; joined with `and`. String comparisons ignore case.
+  `$orderby=activityDateTime asc|desc` (newest first by default), `$top` up to 1,000 (the default), and an
+  `@odata.nextLink` with an opaque `$skiptoken`. Anything else answers `400 Request_BadRequest`.
+- **Not modelled**: refused requests are not logged (every entry is `result: success`); application properties
+  other than the display name are not reported in an update's `modifiedProperties`. The log is kept in memory,
+  the last 10,000 entries, emptied by `POST /_admin/reset`; reading it requires no `AuditLog.Read.All` permission.
+
+```bash
+curl -sG http://localhost:4577/v1.0/auditLogs/directoryAudits \
+  --data-urlencode "\$filter=activityDisplayName eq 'Update application - Certificates and secrets management'"
+```
 
 ## Configuration
 

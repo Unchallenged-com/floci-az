@@ -61,9 +61,12 @@ public class GraphServiceHandler implements AzureServiceHandler {
     private final ObjectMapper mapper = new ObjectMapper();
     private final SecureRandom random = new SecureRandom();
 
+    private final DirectoryAuditLog audits;
+
     @Inject
     public GraphServiceHandler(EmulatorConfig config, GraphDirectoryStore store, DirectoryReader directory,
-                               TenantResolver tenants, AzureDirectory azureDirectory) {
+                               TenantResolver tenants, AzureDirectory azureDirectory, DirectoryAuditLog audits) {
+        this.audits = audits;
         this.config = config;
         this.store = store;
         this.directory = directory;
@@ -89,8 +92,21 @@ public class GraphServiceHandler implements AzureServiceHandler {
         String sub = path.substring("v1.0/".length());
         String[] segments = sub.split("/");
 
+        if (segments.length >= 2 && segments.length <= 3 && "auditLogs".equals(segments[0])
+                && "directoryAudits".equals(segments[1])) {
+            if (!"GET".equals(request.method())) {
+                return methodNotAllowed();
+            }
+            GraphDirectoryAudits endpoint = new GraphDirectoryAudits(audits, graphBase(request));
+            GraphDirectoryAudits.Outcome outcome = segments.length == 3
+                    ? endpoint.get(tenantId(), segments[2])
+                    : endpoint.list(tenantId(), request.queryParams());
+            return outcome.body() != null ? json(outcome.body())
+                    : graphError(outcome.status(), outcome.errorCode(), outcome.message());
+        }
+        DirectoryAuditor audit = new DirectoryAuditor(audits, store, tenantId(), request, random);
         Response applications = new GraphApplications(store, mapper, random, graphBase(request),
-                config.services().entra().defaultTenantId()).handle(request, segments);
+                config.services().entra().defaultTenantId(), audit).handle(request, segments);
         if (applications != null) {
             return applications;
         }
@@ -111,13 +127,13 @@ public class GraphServiceHandler implements AzureServiceHandler {
         if (segments.length == 4 && "groups".equals(segments[0]) && "members".equals(segments[2])
                 && "$ref".equals(segments[3])) {
             return "POST".equals(request.method())
-                    ? addMember(segments[1], request)
+                    ? addMember(segments[1], request, audit)
                     : methodNotAllowed();
         }
         if (segments.length == 5 && "groups".equals(segments[0]) && "members".equals(segments[2])
                 && "$ref".equals(segments[4])) {
             return "DELETE".equals(request.method())
-                    ? removeMember(segments[1], segments[3])
+                    ? removeMember(segments[1], segments[3], audit)
                     : methodNotAllowed();
         }
         return notFound("Unsupported Graph endpoint: " + path);
@@ -232,7 +248,7 @@ public class GraphServiceHandler implements AzureServiceHandler {
         return json(body);
     }
 
-    private Response addMember(String groupId, AzureRequest request) {
+    private Response addMember(String groupId, AzureRequest request, DirectoryAuditor audit) {
         String tenantId = tenantId();
         if (directory.group(tenantId, groupId).isEmpty()) {
             return graphError(404, "Request_ResourceNotFound", "Resource '" + groupId + "' does not exist.");
@@ -243,15 +259,26 @@ public class GraphServiceHandler implements AzureServiceHandler {
             return graphError(400, "Request_BadRequest", "@odata.id is required.");
         }
         store.addLink(tenantId, groupId, GraphDirectoryStore.MEMBERS, memberId);
+        Optional<DirectoryObject> group = store.get(tenantId, DirectoryEntitySet.GROUPS, groupId);
+        Optional<DirectoryObject> member = member(tenantId, memberId);
+        if (group.isPresent() && member.isPresent()) {
+            audit.addMember(group.get(), member.get());
+        }
         return Response.noContent().build();
     }
 
-    private Response removeMember(String groupId, String memberId) {
+    private Response removeMember(String groupId, String memberId, DirectoryAuditor audit) {
         String tenantId = tenantId();
         if (directory.group(tenantId, groupId).isEmpty()) {
             return graphError(404, "Request_ResourceNotFound", "Resource '" + groupId + "' does not exist.");
         }
+        boolean linked = store.links(tenantId, groupId, GraphDirectoryStore.MEMBERS).contains(memberId);
         store.removeLink(tenantId, groupId, GraphDirectoryStore.MEMBERS, memberId);
+        Optional<DirectoryObject> group = store.get(tenantId, DirectoryEntitySet.GROUPS, groupId);
+        Optional<DirectoryObject> member = member(tenantId, memberId);
+        if (linked && group.isPresent() && member.isPresent()) {
+            audit.removeMember(group.get(), member.get());
+        }
         return Response.noContent().build();
     }
 
