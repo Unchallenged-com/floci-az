@@ -95,6 +95,14 @@ public class ActivityLogEventHubExport {
 
     /** Sends {@code exported}'s record to the hub the setting names, when its namespace's broker runs. */
     void deliver(String eventHubAuthorizationRuleId, String eventHubName, ActivityLogExport.Exported exported) {
+        send(eventHubAuthorizationRuleId, hub(eventHubName), exported.record());
+    }
+
+    /**
+     * Sends {@code record} under {@code records} to the hub {@code hub} of the namespace the authorization rule names,
+     * when that namespace's broker runs: how Azure Monitor streams the Activity Log and resource logs.
+     */
+    void send(String eventHubAuthorizationRuleId, String hub, Map<String, Object> record) {
         Optional<NamespaceState> state = namespace(eventHubAuthorizationRuleId)
             .flatMap(name -> namespaces.listNamespaces().entrySet().stream()
                 .filter(entry -> entry.getKey().equalsIgnoreCase(name)).map(Map.Entry::getValue).findFirst());
@@ -104,8 +112,7 @@ public class ActivityLogEventHubExport {
         }
         String host = state.get().amqpHost();
         int port = state.get().amqpPort();
-        String hub = hub(eventHubName);
-        byte[] body = body(List.of(exported.record()));
+        byte[] body = body(List.of(record));
         sender.submit(() -> send(host, port, hub, body));
     }
 

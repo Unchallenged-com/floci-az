@@ -59,21 +59,33 @@ public class ActivityLogStorageExport {
     }
 
     /** Appends {@code exported}'s record to its hourly blob in the storage account {@code storageAccountId}. */
-    synchronized void deliver(String storageAccountId, ActivityLogExport.Exported exported) {
-        Optional<String> account = accountName(storageAccountId);
-        if (account.isEmpty() || exported.event().subscriptionId() == null) {
+    void deliver(String storageAccountId, ActivityLogExport.Exported exported) {
+        if (exported.event().subscriptionId() == null) {
             return;
         }
-        String blob = blobName(exported.event().subscriptionId(), exported.event().eventTimestamp());
-        byte[] line = (json(exported.record()) + "\n").getBytes(StandardCharsets.UTF_8);
-        // The container and the blob exist after their first entry: the create-only writes answer 409 then.
-        send(account.get(), "PUT", CONTAINER, Map.of("restype", "container"), Map.of(), new byte[0]);
-        send(account.get(), "PUT", CONTAINER + "/" + blob, Map.of(),
+        append(storageAccountId, CONTAINER, blobName(exported.event().subscriptionId(), exported.event().eventTimestamp()),
+            exported.record());
+    }
+
+    /**
+     * Appends {@code record}, as one line of JSON, to the append blob {@code blob} of {@code container} in the storage
+     * account {@code storageAccountId}, creating both on first use: how Azure Monitor writes the Activity Log and
+     * resource logs to a storage account.
+     */
+    synchronized void append(String storageAccountId, String container, String blob, Map<String, Object> record) {
+        Optional<String> account = accountName(storageAccountId);
+        if (account.isEmpty()) {
+            return;
+        }
+        byte[] line = (json(record) + "\n").getBytes(StandardCharsets.UTF_8);
+        // The container and the blob exist after their first record: the create-only writes answer 409 then.
+        send(account.get(), "PUT", container, Map.of("restype", "container"), Map.of(), new byte[0]);
+        send(account.get(), "PUT", container + "/" + blob, Map.of(),
             Map.of("x-ms-blob-type", "AppendBlob", "If-None-Match", "*"), new byte[0]);
-        Response appended = send(account.get(), "PUT", CONTAINER + "/" + blob, Map.of("comp", "appendblock"),
+        Response appended = send(account.get(), "PUT", container + "/" + blob, Map.of("comp", "appendblock"),
             Map.of(), line);
         if (appended.getStatus() / 100 != 2) {
-            LOG.warnf("Activity Log export: appending to %s/%s/%s answered %d", account.get(), CONTAINER, blob,
+            LOG.warnf("Log export: appending to %s/%s/%s answered %d", account.get(), container, blob,
                 appended.getStatus());
         }
     }

@@ -606,6 +606,19 @@ public class KeyVaultArmService implements ArmProviderService, StoreIndexSource,
         return DEFAULT_DATA_PLANE_ACCOUNT;
     }
 
+    /** A vault the data plane serves by name: its ARM id, and whether it authorizes callers by Azure RBAC. */
+    public record Vault(ArmResourceId id, boolean rbacAuthorization) {
+    }
+
+    /** The vault named {@code name}, as its management plane keeps it; empty when no vault has that name. */
+    public Optional<Vault> vault(String name) {
+        return vaults.all().stream()
+            .filter(stored -> name != null && name.equalsIgnoreCase(String.valueOf(stored.value().get("name"))))
+            .findFirst()
+            .map(stored -> new Vault(stored.id(), stored.value().get("properties") instanceof Map<?, ?> properties
+                && Boolean.TRUE.equals(properties.get("enableRbacAuthorization"))));
+    }
+
     // ── StoreIndexSource ────────────────────────────────────────────
 
     /**

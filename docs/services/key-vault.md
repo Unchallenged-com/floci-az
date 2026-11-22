@@ -384,6 +384,32 @@ All endpoints sit under `/{accountName}-keyvault/` with an `api-version` query p
 
 ---
 
+## Audit logs
+
+Every data-plane request a vault answers is an `AuditEvent` resource log record, delivered through the vault's
+diagnostic settings (`{vaultId}/providers/Microsoft.Insights/diagnosticSettings/{name}`) that enable the
+`AuditEvent` category or the `audit` or `allLogs` category group; see
+[Resource logs](monitor.md#resource-logs) for the destinations.
+
+- **Operation**: the name the Key Vault logging reference gives the REST operation: `SecretGet`, `SecretSet`,
+  `SecretList`, `SecretDelete`, `SecretUpdate`, `SecretBackup`, `SecretRestore`, `SecretListVersions`, the deleted
+  secret operations (`SecretListDeleted`, `SecretGetDeleted`, `SecretPurge`, `SecretRecover`), their `Key...` and
+  `Certificate...` counterparts, `KeyCreate`, `KeyImport`, `KeySign`, `KeyVerify`, `KeyWrap`, `KeyUnwrap`,
+  `KeyEncrypt`, `KeyDecrypt`, `KeyRotate`, `KeyRotationPolicyGet`, `KeyRotationPolicySet`, and the certificate policy,
+  pending, contact and issuer operations. A request without a token, answered with the `401` challenge, is
+  `Authentication` with `resultSignature` `Unauthorized` and an empty `identity`.
+- **Record**: `time`, `category` `AuditEvent`, `operationName`, `resultType` `Success` (whatever the status),
+  `correlationId` (the `x-ms-client-request-id` header, else a new GUID), `callerIpAddress`, `identity.claim` (the
+  bearer token's claims), `properties` (`id`, the URI of the object the request names, absent on a listing;
+  `clientInfo`, the `User-Agent`; `httpStatusCode`; `requestUri`; `isAccessPolicyMatch`, or `isRbacAuthorized` for a
+  vault with `enableRbacAuthorization`; `tlsVersion` `TLS1_2` over HTTPS; `keyProperties` for a key read, update or
+  delete and `secretProperties` for a secret update), `resourceId` (the vault's, uppercased), `operationVersion`
+  (the `api-version`), `resultSignature` (the status's reason phrase: `OK`, `Not Found`, `Forbidden`),
+  `resultDescription` (the error's message, on a failure only) and `durationMs`, as a string.
+- **Not logged**: management-plane vault operations (`VaultGet`, `VaultPut`, ...), Managed HSM requests, and requests
+  to a vault no management-plane vault names. Azure documents a latency of up to 10 minutes; floci-az delivers at
+  once.
+
 ## Intentional deviations
 
 These are deliberate differences from real Azure Key Vault. They are stable, documented behavior, not bugs:

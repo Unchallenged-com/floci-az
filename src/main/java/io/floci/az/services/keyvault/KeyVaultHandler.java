@@ -20,6 +20,7 @@ import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -44,9 +45,11 @@ public class KeyVaultHandler implements AzureServiceHandler, Resettable {
     private final EmulatorConfig config;
     private final KeyVaultKeys keys;
     private final KeyVaultCertificates certificates;
+    private final KeyVaultAudit audit;
 
     @Inject
-    public KeyVaultHandler(StorageFactory factory, EmulatorConfig config) {
+    public KeyVaultHandler(StorageFactory factory, EmulatorConfig config, KeyVaultAudit audit) {
+        this.audit = audit;
         this.store = factory.create("keyvault");
         this.config = config;
         this.keys = new KeyVaultKeys(store);
@@ -78,10 +81,14 @@ public class KeyVaultHandler implements AzureServiceHandler, Resettable {
 
     @Override
     public Response handle(AzureRequest req) {
+        Instant start = Instant.now();
+        Response response;
         // Certificate ownership checks and mutation must exclude independent key/secret writes.
         synchronized (store) {
-            return handleStoredRequest(req);
+            response = handleStoredRequest(req);
         }
+        audit.record(req, response, start, Duration.between(start, Instant.now()).toMillis());
+        return response;
     }
 
     private Response handleStoredRequest(AzureRequest req) {

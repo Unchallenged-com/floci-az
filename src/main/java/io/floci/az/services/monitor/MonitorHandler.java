@@ -760,6 +760,79 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
         }
     }
 
+    /**
+     * Delivers a resource log record through every diagnostic setting of its resource whose enabled log entries take
+     * its category or one of its category groups: a line of the hourly blob of {@code insights-logs-{category}} in the
+     * setting's storage account, an event in its event hub ({@code eventHubName}, else {@code insights-logs-{category}}),
+     * and a row in its workspace, of {@code AzureDiagnostics} or, for a {@code Dedicated} setting, of the category's own
+     * table. Azure delivers within minutes; the emulator delivers at once.
+     */
+    void onResourceLog(@Observes ResourceLogRecord log) {
+        if (!config.services().monitor().enabled()) {
+            return;
+        }
+        ArmResourceId resource = ArmResourceId.parse(log.resourceId()).orElse(null);
+        if (resource == null) {
+            return;
+        }
+        String resourceKey = resource.canonicalKey();
+        List<MonitorResource> settings = diagnosticSettings.all().stream()
+            .filter(stored -> stored.id().scope() != null && resourceKey.equals(stored.id().scope().canonicalKey()))
+            .map(ArmResourceStore.Stored::value)
+            .filter(setting -> takes(setting, log))
+            .toList();
+        for (MonitorResource setting : settings) {
+            String storageAccountId = setting.property("storageAccountId");
+            if (storageAccountId != null) {
+                storageExport.append(storageAccountId, log.destinationName(), log.blobName(), log.record());
+            }
+            String eventHubRule = setting.property("eventHubAuthorizationRuleId");
+            if (eventHubRule != null) {
+                String hub = setting.property("eventHubName");
+                eventHubExport.send(eventHubRule, hub == null || hub.isBlank() ? log.destinationName() : hub, log.record());
+            }
+            String workspaceResourceId = setting.property("workspaceId");
+            if (workspaceResourceId == null) {
+                continue;
+            }
+            boolean dedicated = "Dedicated".equalsIgnoreCase(setting.property("logAnalyticsDestinationType"))
+                && log.dedicatedTable() != null;
+            ArmResourceId.parse(workspaceResourceId)
+                .filter(id -> WORKSPACE_TYPE.equalsIgnoreCase(id.typePath()))
+                .flatMap(workspaces::get)
+                .map(ArmResourceStore.Stored::value)
+                .ifPresent(workspace -> {
+                    String customerId = workspace.property("customerId") != null
+                        ? workspace.property("customerId") : workspace.name();
+                    Map<String, Object> row;
+                    if (dedicated) {
+                        row = new LinkedHashMap<>(log.dedicatedRow());
+                        row.put("TenantId", customerId);
+                    } else {
+                        row = log.azureDiagnosticsRow(customerId);
+                    }
+                    writeRecord(customerId, dedicated ? log.dedicatedTable() : "AzureDiagnostics", row, log.time());
+                });
+        }
+    }
+
+    /** Whether an enabled log entry of {@code setting} names the record's category or one of its groups. */
+    private static boolean takes(MonitorResource setting, ResourceLogRecord log) {
+        Object logs = setting.properties() == null ? null : setting.properties().get("logs");
+        if (!(logs instanceof List<?> entries)) {
+            return false;
+        }
+        for (Object raw : entries) {
+            if (raw instanceof Map<?, ?> entry && Boolean.TRUE.equals(entry.get("enabled"))
+                    && (log.category().equalsIgnoreCase(String.valueOf(entry.get("category")))
+                        || log.categoryGroups().stream()
+                            .anyMatch(group -> group.equalsIgnoreCase(String.valueOf(entry.get("categoryGroup")))))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // -------------------------------------------------------------------------
     // Log Query API
     // -------------------------------------------------------------------------

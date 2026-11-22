@@ -256,6 +256,27 @@ tenant and management-group entries (no subscription), are not exported.
   table's columns imply; no exported failure record was found to confirm it. Azure batches several records into
   one event and documents no batch size; the event's content type is not documented either, and none is set.
 
+## Resource logs
+
+A service's resource log records (today Key Vault's `AuditEvent`, see [Key Vault](key-vault.md#audit-logs)) go
+through every diagnostic setting of the resource with an enabled log entry naming the record's category or one of
+its category groups, as they are recorded:
+
+- **Storage account**: one line of JSON per record in the hourly append blob
+  `insights-logs-{category}/resourceId={RESOURCE ID}/y={yyyy}/m={MM}/d={dd}/h={HH}/m=00/PT1H.json`, the resource id
+  uppercased.
+- **Event Hubs**: an event `{"records": [<record>]}` to the setting's `eventHubName`, else to
+  `insights-logs-{category}` (`insights-logs-auditevent`); the hub must be declared in the namespace's entities.
+- **Log Analytics**: a row of the shared `AzureDiagnostics` table, or, for a setting whose
+  `logAnalyticsDestinationType` is `Dedicated`, of the category's own table (`AZKVAuditLogs`). An `AzureDiagnostics`
+  row carries `ResourceId`, `ResourceGroup`, `ResourceProvider`, `ResourceType` and `Resource` uppercased,
+  `_ResourceId` lowercased, the schema's columns (`OperationName`, `ResultType`, `ResultSignature`,
+  `ResultDescription`, `CorrelationId`, `CallerIPAddress`, `OperationVersion`, `DurationMs`), and every other field
+  flattened into a column named after its path joined by `_`, claims under `identity_claim_`, with the suffix of its
+  type (`requestUri_s`, `httpStatusCode_d`, `isAccessPolicyMatch_b`, `identity_claim_oid_g`). A list is not
+  flattened: it is one `_s` column holding the list as compact JSON (`keyProperties_operations_s` is
+  `["sign","verify"]`).
+
 ## Supported KQL subset
 
 The query engine implements a pragmatic subset of KQL: enough for the assertions test suites and
