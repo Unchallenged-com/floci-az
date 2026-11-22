@@ -9,6 +9,7 @@ import io.floci.az.core.arm.ArmErrors;
 import io.floci.az.core.arm.ArmRequestRule;
 import io.floci.az.core.arm.ArmVerdict;
 import io.floci.az.core.auth.BearerClaims;
+import io.floci.az.services.monitor.activitylog.ActivityLog;
 import io.floci.az.services.policy.evaluation.PolicyEngine.Match;
 import io.floci.az.services.policy.evaluation.PolicyEngine.Outcome;
 import io.floci.az.services.policyinsights.ComplianceStore;
@@ -25,6 +26,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -32,7 +34,8 @@ import java.util.UUID;
  * The gate rule that evaluates Azure Policy on every PUT and PATCH of a resource, before its handler runs:
  * a matching {@code deny} answers {@code 403 RequestDisallowedByPolicy} in the handler's place, a matching
  * {@code append} amends the body the handler then reads, and a matching {@code audit} is recorded once the
- * handler has answered. Every effect that fires is kept in the {@link PolicyEvaluationLog}.
+ * handler has answered. Every effect that fires is kept in the {@link PolicyEvaluationLog}, and a deny or an audit is
+ * written to the Activity Log as a {@code Policy} entry of the write's operation ({@link PolicyActivity}).
  *
  * <p>Off under {@code floci-az.services.policy.enforcement=false}, and when the policy service is disabled.
  */
@@ -59,20 +62,22 @@ public class PolicyEvaluationRule implements ArmRequestRule {
     private final Set<ArmCall> deletions = Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
 
     private record Pending(PolicyEngine.Request request, List<Match> audits, String caller, String correlationId,
-                           List<PolicyEngine.Evaluation> evaluations) {
+                           List<PolicyEngine.Evaluation> evaluations, Optional<ActivityLog.RequestFacts> operation) {
     }
 
     private final ComplianceStore compliance;
+    private final PolicyActivity activity;
 
     @Inject
     public PolicyEvaluationRule(PolicyEngine engine, PolicyEvaluationLog log, Instance<ArmRouter> router,
-                                ComplianceStore compliance, EmulatorConfig config) {
-        this(engine, log, router, compliance,
+                                ComplianceStore compliance, PolicyActivity activity, EmulatorConfig config) {
+        this(engine, log, router, compliance, activity,
             config.services().policy().enabled() && config.services().policy().enforcement());
     }
 
     PolicyEvaluationRule(PolicyEngine engine, PolicyEvaluationLog log, Instance<ArmRouter> router,
-                         ComplianceStore compliance, boolean enabled) {
+                         ComplianceStore compliance, PolicyActivity activity, boolean enabled) {
+        this.activity = activity;
         this.engine = engine;
         this.log = log;
         this.router = router;
@@ -134,6 +139,7 @@ public class PolicyEvaluationRule implements ArmRequestRule {
             for (Match denial : outcome.denials()) {
                 log.record(event(evaluation, denial, "deny", "Error", "Failed", caller, correlationId));
             }
+            activity.record(activity.operation(call), call, "deny", outcome.denials(), evaluation.content());
             String name = PolicyEngine.resourceName(call.id());
             LOG.infof("Policy: %s %s disallowed by %d policy definition(s)", call.method(), call.id().id(),
                 outcome.denials().size());
@@ -151,7 +157,8 @@ public class PolicyEvaluationRule implements ArmRequestRule {
         for (Match append : appends) {
             log.record(event(evaluation, append, "append", "Informational", "Succeeded", caller, correlationId));
         }
-        pending.put(call, new Pending(evaluation, audits, caller, correlationId, outcome.evaluations()));
+        pending.put(call, new Pending(evaluation, audits, caller, correlationId, outcome.evaluations(),
+            audits.isEmpty() ? Optional.empty() : activity.operation(call)));
         return ArmVerdict.proceed();
     }
 
@@ -171,6 +178,7 @@ public class PolicyEvaluationRule implements ArmRequestRule {
         for (Match match : admitted.audits()) {
             log.record(event(admitted.request(), match, "audit", "Warning", "Succeeded", admitted.caller(), admitted.correlationId()));
         }
+        activity.record(admitted.operation(), call, "audit", admitted.audits(), admitted.request().content());
         // A tags-only PATCH is evaluated against the tag-inspecting definitions only, so the verdicts of the
         // others stand; any other write re-evaluated everything and replaces the resource's records.
         if (!admitted.request().tagsOnly()) {

@@ -145,14 +145,16 @@ class ActivityLogTest {
                 .then().statusCode(403);
         list("eventTimestamp ge '" + since + "' and correlationId eq 'corr-denied'")
                 .statusCode(200)
-                .body("value", hasSize(2))
+                .body("value", hasSize(3))
                 .body("value[0].eventName.value", equalTo("EndRequest"))
                 .body("value[0].operationName.value", equalTo("Microsoft.Storage/storageAccounts/write"))
                 .body("value[0].status.value", equalTo("Failed"))
                 .body("value[0].level", equalTo("Error"))
                 .body("value[0].subStatus.value", equalTo("Forbidden"))
                 .body("value[0].properties.statusMessage", containsString("RequestDisallowedByPolicy"))
-                .body("value[1].eventName.value", equalTo("BeginRequest"));
+                .body("value[1].category.value", equalTo("Policy"))
+                .body("value[1].operationName.value", equalTo("Microsoft.Authorization/policies/deny/action"))
+                .body("value[2].eventName.value", equalTo("BeginRequest"));
     }
 
     @Test

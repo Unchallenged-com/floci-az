@@ -11,7 +11,8 @@ import java.util.function.Predicate;
 
 /**
  * The policy effects that fired, newest last, kept in memory for inspection through
- * {@code GET /_admin/policy/evaluations} and, later, the Activity Log. Bounded so a long-running emulator
+ * {@code GET /_admin/policy/evaluations}; the deny and audit effects also reach the Activity Log through
+ * {@link PolicyActivity}. Bounded so a long-running emulator
  * does not grow without limit.
  */
 @ApplicationScoped

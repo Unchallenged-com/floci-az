@@ -16,6 +16,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -43,6 +44,10 @@ public class ActivityLogRule implements ArmRequestRule {
     /** The operations begun and not yet ended, by call identity. */
     private final Map<ArmCall, ActivityLog.RequestFacts> begun = Collections.synchronizedMap(new IdentityHashMap<>());
 
+    /** The same operations by request, which a call a later rule amended still carries. */
+    private final Map<AzureRequest, ActivityLog.RequestFacts> byRequest =
+        Collections.synchronizedMap(new IdentityHashMap<>());
+
     @Inject
     public ActivityLogRule(ActivityLog log, EmulatorConfig config) {
         this(log, config.services().monitor().enabled() && config.services().monitor().activityLog().enabled());
@@ -65,6 +70,9 @@ public class ActivityLogRule implements ArmRequestRule {
         }
         ActivityLog.RequestFacts facts = facts(call);
         begun.put(call, facts);
+        if (call.request() != null) {
+            byRequest.put(call.request(), facts);
+        }
         log.record(entry(facts, "BeginRequest", "Started", "", "Informational", Map.of()));
         return ArmVerdict.proceed();
     }
@@ -74,6 +82,9 @@ public class ActivityLogRule implements ArmRequestRule {
         ActivityLog.RequestFacts facts = begun.remove(call);
         if (facts == null) {
             return;
+        }
+        if (call.request() != null) {
+            byRequest.remove(call.request());
         }
         int status = response == null ? 500 : response.getStatus();
         boolean succeeded = status / 100 == 2;
@@ -87,6 +98,22 @@ public class ActivityLogRule implements ArmRequestRule {
         }
         log.record(entry(facts, "EndRequest", succeeded ? "Succeeded" : "Failed", subStatus,
             succeeded ? "Informational" : "Error", properties));
+    }
+
+    /**
+     * The facts of the operation {@code call} belongs to, as this rule recorded them on entry, for the entries other
+     * services add to the same operation (a policy effect that fires on it shares its correlation id and caller);
+     * empty when the Activity Log is off or does not log the request.
+     */
+    public Optional<ActivityLog.RequestFacts> operation(ArmCall call) {
+        if (!enabled || call == null) {
+            return Optional.empty();
+        }
+        ActivityLog.RequestFacts facts = begun.get(call);
+        if (facts == null && call.request() != null) {
+            facts = byRequest.get(call.request());
+        }
+        return Optional.ofNullable(facts);
     }
 
     /** Writes, deletes and actions on provider resources and on resource groups; never reads or listings. */

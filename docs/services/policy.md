@@ -225,8 +225,9 @@ and an `app` otherwise.
 
 ### Inspecting what fired
 
-Every effect that fired is kept in memory, newest last, with the fields the Activity Log carries for a
-`Microsoft.Authorization/policies/{deny|audit|append}/action` event:
+A `deny` or an `audit` is also written to the [Activity Log](monitor.md#activity-log) as a `Policy` entry of the
+write's operation. Every effect that fired, `append` included, is kept in memory, newest last, with the fields the
+Activity Log carries for a `Microsoft.Authorization/policies/{deny|audit|append}/action` event:
 
 ```bash
 curl -s "http://localhost:4577/_admin/policy/evaluations" | jq .

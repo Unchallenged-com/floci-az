@@ -169,9 +169,14 @@ curl -s "http://localhost:4577/subscriptions/00000000-0000-0000-0000-00000000000
 - **`$select`** narrows each entry to the named properties.
 - **Paging**: `activity-log.page-size` entries per page (default 1000), the rest behind `nextLink`
   with an opaque `$skiptoken`. Entries are newest first.
-- **`Policy` entries**: services that evaluate policy can record
-  `Microsoft.Authorization/policies/{effect}/action` entries through `ActivityLog.recordPolicyEffect`,
-  with the `properties.policies` JSON the Policy category carries.
+- **`Policy` entries**: a `deny` or `audit` that [Azure Policy](policy.md) applies to a write is recorded in the
+  write's operation (same `correlationId`, caller, claims and `authorization`) as a `Policy` category `EndRequest`
+  entry, `Microsoft.Authorization/policies/deny/action` (`Failed`, `Error`, written before the write's own failed
+  `EndRequest`) or `Microsoft.Authorization/policies/audit/action` (`Succeeded`, `Warning`, once the write
+  succeeded). Its `properties` carry `isComplianceCheck` `False`, the resource's `resourceLocation`, the
+  management groups above its subscription as `ancestors` (parent first, the tenant root last) and the
+  definitions that fired as the `policies` JSON: definition, initiative, assignment and effect (`Deny`, `Audit`).
+  An `append` leaves no entry, as Azure's operations list has no `policies/append/action`.
 - Any `api-version` is accepted, the stable `2015-04-01` and the `2017-03-01-preview` alike.
 
 ## Supported KQL subset

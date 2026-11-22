@@ -98,9 +98,11 @@ public class ActivityLog implements Resettable {
      * @param effect   the effect that fired, lowercase ({@code deny}, {@code audit}, {@code append}, ...)
      * @param policies one map per definition, with the {@code policyDefinitionId}, {@code policyAssignmentId}
      *                 and related keys the Policy event schema lists
+     * @param resourceLocation the evaluated resource's location, or null
+     * @param ancestors the management groups above the resource's subscription, from its parent to the root
      */
     public ActivityLogEvent recordPolicyEffect(RequestFacts request, String effect, List<Map<String, Object>> policies,
-                                               String resourceLocation) {
+                                               String resourceLocation, List<String> ancestors) {
         String level = switch (effect) {
             case "deny" -> "Error";
             case "audit" -> "Warning";
@@ -111,7 +113,7 @@ public class ActivityLog implements Resettable {
         if (resourceLocation != null) {
             properties.put("resourceLocation", resourceLocation);
         }
-        properties.put("ancestors", "");
+        properties.put("ancestors", String.join(",", ancestors));
         properties.put("policies", json(policies));
         Instant now = Instant.now();
         ActivityLogEvent event = new ActivityLogEvent(UUID.randomUUID().toString(), request.operationId(),
