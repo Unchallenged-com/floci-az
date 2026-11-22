@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.floci.az.config.EmulatorConfig;
 import io.floci.az.core.Resettable;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
 
 import java.time.Instant;
@@ -34,25 +35,40 @@ public class ActivityLog implements Resettable {
 
     private final Deque<Entry> events = new ArrayDeque<>();
     private final int capacity;
+    private final Event<ActivityLogEvent> recorded;
     private long nextSequence = 1;
 
     @Inject
-    public ActivityLog(EmulatorConfig config) {
-        this(config.services().monitor().activityLog().capacity());
+    public ActivityLog(EmulatorConfig config, Event<ActivityLogEvent> recorded) {
+        this(config.services().monitor().activityLog().capacity(), recorded);
     }
 
     ActivityLog(int capacity) {
-        this.capacity = capacity;
+        this(capacity, null);
     }
 
-    public synchronized void record(ActivityLogEvent event) {
-        if (capacity <= 0) {
-            return; // a log that keeps nothing
+    private ActivityLog(int capacity, Event<ActivityLogEvent> recorded) {
+        this.capacity = capacity;
+        this.recorded = recorded;
+    }
+
+    /**
+     * Keeps {@code event} and hands it to its observers (the export of the subscription diagnostic settings), once
+     * kept and outside the log's lock.
+     */
+    public void record(ActivityLogEvent event) {
+        synchronized (this) {
+            if (capacity <= 0) {
+                return; // a log that keeps nothing
+            }
+            if (events.size() >= capacity) {
+                events.removeFirst();
+            }
+            events.addLast(new Entry(nextSequence++, event));
         }
-        if (events.size() >= capacity) {
-            events.removeFirst();
+        if (recorded != null) {
+            recorded.fire(event);
         }
-        events.addLast(new Entry(nextSequence++, event));
     }
 
     /**

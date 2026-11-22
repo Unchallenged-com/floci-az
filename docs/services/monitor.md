@@ -211,6 +211,38 @@ and `categoryGroup` or a setting mixing category groups with categories, `metric
 the read of a setting saved without categories (Azure may answer it `404`). A resource's category or category group
 is not checked against its type.
 
+## Activity Log export
+
+A subscription's diagnostic setting (see [Diagnostic settings](#diagnostic-settings)) exports the subscription's
+Activity Log entries as they are recorded: an entry goes through every setting of its subscription with an enabled
+log entry naming its category (`Administrative`, `Policy`, ...) or the `allLogs` category group. Azure documents a
+latency of 3 to 20 minutes for the Activity Log; floci-az delivers at once. Entries recorded before the setting, and
+tenant and management-group entries (no subscription), are not exported.
+
+- **Log Analytics** (`workspaceId`): each entry is a row of the workspace's `AzureActivity` table, readable through
+  the query API (`AzureActivity | where CategoryValue == 'Administrative'`). The row carries the table's columns as
+  Azure writes them: `OperationNameValue`, `ResourceProviderValue` and `ResourceGroup` uppercased, `_ResourceId` and
+  `SubscriptionId` lowercased, `ActivityStatusValue` `Start`, `Success` or `Failure`, `ActivitySubstatusValue` the
+  HTTP status word (empty on a start), `Level` `Information`, `Warning` or `Error`, `Caller`, `CallerIpAddress`,
+  `CorrelationId`, `EventDataId`, `Hierarchy` (`{tenant}/{management groups}/{subscription}`), `Authorization` and
+  `Claims` as text and as `Authorization_d` and `Claims_d`, `Properties` and `Properties_d` (the exported properties
+  plus `caller`, `eventDataId`, `eventSubmissionTimestamp`, `httpRequest`, `resource`, `resourceGroup`,
+  `resourceProviderValue`, `subscriptionId`, `activityStatusValue` and `activitySubstatusValue`), `HTTPRequest`,
+  `TimeGenerated` and `EventSubmissionTimestamp`, `TenantId` the workspace id, `SourceSystem` `Azure` and `Type`
+  `AzureActivity`. The deprecated columns (`OperationName`, `Category`, `ActivityStatus`, `ActivitySubstatus`,
+  `ResourceId`, `ResourceProvider`, `Resource`, `OperationId`) are empty.
+- **The exported record**, the resource-log schema storage accounts and event hubs receive, is built once per entry:
+  `time`, `resourceId` and `operationName` uppercased, `category`, `resultType` (`Start`, `Success`, `Failure`),
+  `resultSignature` (`Started.`, `Succeeded.Created`), `durationMs` as a string (`0` on a start, the time since the
+  start on an end), `callerIpAddress`, `correlationId`, `identity` (`authorization` with `scope` and `action`,
+  `claims`), `level`, `properties` (the entry's own, plus `eventCategory`, `entity`, `message` and `hierarchy`,
+  empty for a Policy entry) and `tenantId`.
+- **Not reproduced**: the undocumented `RoleLocation`, `Stamp` and `ReleaseVersion` fields, `properties.requestbody`
+  and `responseBody`, `identity.authorization.evidence` (role assignments are not evaluated), and the `audit`
+  category group of a subscription setting. A failed entry's `resultSignature` is `Failed.{subStatus}`, as the
+  table's columns imply; no exported failure record was found to confirm it. The storage account and Event Hubs
+  destinations are not served yet.
+
 ## Supported KQL subset
 
 The query engine implements a pragmatic subset of KQL: enough for the assertions test suites and

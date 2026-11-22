@@ -22,8 +22,10 @@ import io.floci.az.core.storage.StorageFactory;
 import io.floci.az.services.monitor.MonitorModels.DeletedWorkspace;
 import io.floci.az.services.monitor.MonitorModels.MonitorResource;
 import io.floci.az.services.monitor.activitylog.ActivityLogEndpoint;
+import io.floci.az.services.monitor.activitylog.ActivityLogEvent;
 import io.quarkus.runtime.configuration.MemorySize;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -126,13 +128,15 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
     private Map<String, ArmResourceId> workspacesByCustomerId;
 
     private final ActivityLogEndpoint activityLog;
+    private final ActivityLogExport export;
     private final CloudDefaults defaults;
 
     @Inject
     public MonitorHandler(StorageFactory factory, EmulatorConfig config,
                           @ConfigProperty(name = "quarkus.http.limits.max-body-size", defaultValue = "2G")
                           MemorySize maxBodySize,
-                          CloudDefaults defaults, ActivityLogEndpoint activityLog) {
+                          CloudDefaults defaults, ActivityLogEndpoint activityLog, ActivityLogExport export) {
+        this.export = export;
         this.defaults = defaults;
         this.activityLog = activityLog;
         this.store = factory.create("monitor");
@@ -685,12 +689,61 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
                 record.put("TimeGenerated", now.toString());
             }
 
-            // Key format: workspaceId/stream/timestamp/id
-            String recordKey = String.format("%s/%s/%s/%s", workspaceId, stream, recordTime.toString(), UUID.randomUUID().toString());
-            store.put(recordKey, new StoredObject(recordKey, toBytes(record), Map.of(), recordTime, ""));
+            writeRecord(workspaceId, stream, record, recordTime);
         }
 
         return Response.noContent().build();
+    }
+
+    /** Keeps one log record of a workspace's table, under {@code {workspaceId}/{stream}/{time}/{id}}. */
+    private void writeRecord(String workspaceId, String stream, Map<String, Object> record, Instant recordTime) {
+        String recordKey = String.format("%s/%s/%s/%s", workspaceId, stream, recordTime.toString(), UUID.randomUUID().toString());
+        store.put(recordKey, new StoredObject(recordKey, toBytes(record), Map.of(), recordTime, ""));
+    }
+
+    // -------------------------------------------------------------------------
+    // Activity Log export
+    // -------------------------------------------------------------------------
+
+    /**
+     * Exports an Activity Log entry, as it is recorded, through every diagnostic setting of its subscription that takes
+     * its category: an {@code AzureActivity} row in the setting's Log Analytics workspace. Azure delivers within
+     * minutes; the emulator delivers at once.
+     */
+    void onActivityLogEntry(@Observes ActivityLogEvent event) {
+        if (!config.services().monitor().enabled() || event.subscriptionId() == null) {
+            return;
+        }
+        ArmResourceId subscription = ArmResourceId.parse("/subscriptions/" + event.subscriptionId()).orElse(null);
+        if (subscription == null) {
+            return;
+        }
+        String subscriptionKey = subscription.canonicalKey();
+        List<MonitorResource> settings = diagnosticSettings.all().stream()
+            .filter(stored -> stored.id().scope() != null && subscriptionKey.equals(stored.id().scope().canonicalKey()))
+            .map(ArmResourceStore.Stored::value)
+            .filter(setting -> ActivityLogExport.exports(setting, event))
+            .toList();
+        if (settings.isEmpty()) {
+            return;
+        }
+        ActivityLogExport.Exported exported = export.export(event);
+        for (MonitorResource setting : settings) {
+            String workspaceResourceId = setting.property("workspaceId");
+            if (workspaceResourceId == null) {
+                continue;
+            }
+            ArmResourceId.parse(workspaceResourceId)
+                .filter(id -> WORKSPACE_TYPE.equalsIgnoreCase(id.typePath()))
+                .flatMap(workspaces::get)
+                .map(ArmResourceStore.Stored::value)
+                .ifPresent(workspace -> {
+                    String customerId = workspace.property("customerId") != null
+                        ? workspace.property("customerId") : workspace.name();
+                    writeRecord(customerId, ActivityLogExport.TABLE,
+                        ActivityLogExport.azureActivityRow(exported, customerId), event.submissionTimestamp());
+                });
+        }
     }
 
     // -------------------------------------------------------------------------
