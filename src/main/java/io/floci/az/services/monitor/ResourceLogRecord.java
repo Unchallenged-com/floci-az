@@ -26,9 +26,23 @@ import java.util.regex.Pattern;
  * @param dedicatedTable the resource-specific Log Analytics table, for a setting whose
  *                       {@code logAnalyticsDestinationType} is {@code Dedicated}; null when the category has none
  * @param dedicatedRow   the record's row in {@code dedicatedTable}, keyed by column
+ * @param pathResourceId the resource id as the storage destination's blob path spells it
+ * @param dedicatedOnly  whether the category goes to {@code dedicatedTable} whatever the setting's destination type,
+ *                       for a resource whose logs have no {@code AzureDiagnostics} form
  */
 public record ResourceLogRecord(String resourceId, String category, List<String> categoryGroups, Instant time,
-                                Map<String, Object> record, String dedicatedTable, Map<String, Object> dedicatedRow) {
+                                Map<String, Object> record, String dedicatedTable, Map<String, Object> dedicatedRow,
+                                String pathResourceId, boolean dedicatedOnly) {
+
+    /**
+     * A record whose blob path uppercases the resource id, as the resource logs reference writes it, and which goes
+     * to {@code AzureDiagnostics} unless the setting asks for the dedicated table.
+     */
+    public ResourceLogRecord(String resourceId, String category, List<String> categoryGroups, Instant time,
+                             Map<String, Object> record, String dedicatedTable, Map<String, Object> dedicatedRow) {
+        this(resourceId, category, categoryGroups, time, record, dedicatedTable, dedicatedRow,
+            resourceId.toUpperCase(Locale.ROOT), false);
+    }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final DateTimeFormatter HOUR =
@@ -47,9 +61,9 @@ public record ResourceLogRecord(String resourceId, String category, List<String>
         return "insights-logs-" + category.toLowerCase(Locale.ROOT);
     }
 
-    /** {@code resourceId=/{RESOURCE ID}/y={yyyy}/m={MM}/d={dd}/h={HH}/m=00/PT1H.json}, uppercased, by the hour in UTC. */
+    /** {@code resourceId={RESOURCE ID}/y={yyyy}/m={MM}/d={dd}/h={HH}/m=00/PT1H.json}, by the hour in UTC. */
     public String blobName() {
-        return "resourceId=" + resourceId.toUpperCase(Locale.ROOT) + "/" + HOUR.format(time) + "/PT1H.json";
+        return "resourceId=" + pathResourceId + "/" + HOUR.format(time) + "/PT1H.json";
     }
 
     /**

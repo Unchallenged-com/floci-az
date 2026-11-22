@@ -29,6 +29,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.DateTimeException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -104,6 +105,7 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
     private final Map<String, Boolean> hierarchicalNamespaceOverrides = new ConcurrentHashMap<>();
 
     private final UserDelegationKeyService userDelegationKeyService;
+    private final BlobResourceLogs resourceLogs;
     private final StorageSasAuthorization sasAuthorization;
     private final DataLakePathOperations dataLakePathOperations;
 
@@ -114,7 +116,8 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
     public BlobServiceHandler(StorageFactory storageFactory, EmulatorConfig config,
                               UserDelegationKeyService userDelegationKeyService,
                               StorageSasAuthorization sasAuthorization,
-                              BlobLeaseService leaseService) {
+                              BlobLeaseService leaseService, BlobResourceLogs resourceLogs) {
+        this.resourceLogs = resourceLogs;
         this.config = config;
         this.userDelegationKeyService = userDelegationKeyService;
         this.sasAuthorization = sasAuthorization;
@@ -144,8 +147,21 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
 
     }
 
+    /** Serves a request and writes its resource log record, as the Blob service logs every request it answers. */
     @Override
     public Response handle(AzureRequest request) {
+        Instant start = Instant.now();
+        Response response = handleUnlogged(request);
+        resourceLogs.record(request, response, start, Duration.between(start, Instant.now()).toMillis());
+        return response;
+    }
+
+    /**
+     * Serves a request without writing a resource log record: the requests the emulator makes itself, such as the
+     * log export's own writes, which Azure does not log ("Requests made by the Blob storage service itself, such as
+     * log creation or deletion, aren't logged").
+     */
+    public Response handleUnlogged(AzureRequest request) {
         String path = request.resourcePath();
         String method = request.method();
         Map<String, String> query = request.queryParams();

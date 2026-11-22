@@ -629,6 +629,18 @@ public class StorageAccountArmService
 
     // ── Resource index, global names, reset ─────────────────────────────────
 
+    /** A storage account the data plane serves by name: its ARM id and its location. */
+    public record Account(ArmResourceId id, String location) {
+    }
+
+    /** The storage account named {@code name}, as its management plane keeps it; empty when none has that name. */
+    public Optional<Account> account(String name) {
+        return accounts.all().stream()
+            .filter(stored -> name != null && name.equalsIgnoreCase(String.valueOf(stored.value().get("name"))))
+            .findFirst()
+            .map(stored -> new Account(stored.id(), stored.value().get("location") instanceof String l ? l : null));
+    }
+
     @Override
     public List<Map<String, Object>> indexEntries(ArmScope scope) {
         return documents(scope);

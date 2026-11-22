@@ -173,6 +173,37 @@ floci-az:
 | `storage.services.blob.mode` | `FLOCI_AZ_STORAGE_SERVICES_BLOB_MODE` | *(inherits `storage.mode`)* | Per-service backend override (`memory` / `persistent` / `hybrid` / `wal`) |
 | `storage.services.blob.flush-interval-ms` | `FLOCI_AZ_STORAGE_SERVICES_BLOB_FLUSH_INTERVAL_MS` | `5000` | Background flush-to-disk interval for the `hybrid` mode only; ignored by `memory` / `persistent` / `wal` (`wal` compacts on `storage.wal.compaction-interval-ms` instead) |
 
+## Resource logs
+
+Every request the Blob service answers for an account the management plane holds is a resource log record of the
+account's `blobServices/default`, delivered through that resource's diagnostic settings
+(`{accountId}/blobServices/default/providers/Microsoft.Insights/diagnosticSettings/{name}`) that enable its category
+or the `audit` or `allLogs` group; see [Resource logs](monitor.md#resource-logs) for the destinations.
+
+- **Category**: `StorageDelete` for `DeleteBlob` and `DeleteContainer`, `StorageRead` for the reads (`GetBlob`,
+  `GetBlobProperties`, `ListBlobs`, `ListContainers`, `GetContainerProperties`, `GetBlockList`, ...), `StorageWrite`
+  for the rest (`PutBlob`, `CreateContainer`, `PutBlock`, `PutBlockList`, `AppendBlock`, `CopyBlob`, `SetBlobMetadata`,
+  leases, ...). Operations are named as the Storage logged operations reference names them.
+- **Record**: `time`, `resourceId` (the account's `.../blobServices/default`, in its case), `category`,
+  `operationName`, `operationVersion` (the `x-ms-version` header), `schemaVersion` `1.0`, `statusCode` and
+  `durationMs` as numbers, `statusText` (`Success`, or the error code such as `BlobNotFound`), `callerIpAddress`,
+  `correlationId` (the `x-ms-request-id` the service answered with), `identity` (`type`: `AccountKey`, `SAS`,
+  `DelegationSAS`, `OAuth` or `Anonymous`; for OAuth, `tokenHash`, the SHA-256 of the token in uppercase hex, and the
+  token's `requester`), `location`, `properties`
+  (`accountName`, `userAgentHeader`, `referrerHeader`, `clientRequestId`, `etag`, `serviceType` `blob`, `objectKey`,
+  `metricResponseType`, `serverLatencyMs`, `requestHeaderSize` and `responseHeaderSize` (the bytes of the header
+  lines), `requestBodySize`, `responseBodySize`, `tlsVersion` `TLS 1.2` over HTTPS), `uri`,
+  `protocol` and `resourceType`.
+- **Log Analytics**: Blob logs go to `StorageBlobLogs`, whatever the setting's `logAnalyticsDestinationType`, with
+  the location's display name (`East US`) in `Location` and the status as a string in `StatusCode`.
+- **Not logged**, as the Blob monitoring reference says: activity in the `insights-logs-` containers and the
+  service's own writes of the log lines. Failed anonymous requests are logged, as exported records show, although the
+  reference says only some are. Requests to an account no management plane account names are not logged either.
+- **Not reproduced**: the `tokenHash` of an account key or SAS request (the emulator's `key1` and `key2` are the same
+  key, so which one signed cannot be told), `identity.authorization` (role assignments are not evaluated), and the
+  MD5 and tier fields. Azure documents a latency of 3 to 10 minutes for resource logs; floci-az delivers at once. Azure
+  also refuses to send an account's logs to the account itself; floci-az accepts the setting.
+
 ## Intentional deviations
 
 - **Shared Key signatures are accepted but not cryptographically verified**: the emulator is a

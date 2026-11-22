@@ -95,7 +95,8 @@ public class ActivityLogStorageExport {
         Map<String, String> requestHeaders = new LinkedHashMap<>(headers);
         requestHeaders.put("Content-Length", String.valueOf(body.length));
         InputStream stream = new ByteArrayInputStream(body);
-        return blobs.handle(new AzureRequest(method, account, "blob", path, new SyntheticHttpHeaders(requestHeaders),
+        // Written as the service writes its own logs: unlogged, as Azure does not log the Blob service's own requests.
+        return blobs.handleUnlogged(new AzureRequest(method, account, "blob", path, new SyntheticHttpHeaders(requestHeaders),
             stream, query, Map.of(), null, false));
     }
 

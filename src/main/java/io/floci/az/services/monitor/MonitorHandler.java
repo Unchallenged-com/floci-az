@@ -764,8 +764,8 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
      * Delivers a resource log record through every diagnostic setting of its resource whose enabled log entries take
      * its category or one of its category groups: a line of the hourly blob of {@code insights-logs-{category}} in the
      * setting's storage account, an event in its event hub ({@code eventHubName}, else {@code insights-logs-{category}}),
-     * and a row in its workspace, of {@code AzureDiagnostics} or, for a {@code Dedicated} setting, of the category's own
-     * table. Azure delivers within minutes; the emulator delivers at once.
+     * and a row in its workspace, of {@code AzureDiagnostics} or, for a {@code Dedicated} setting or a category with no
+     * {@code AzureDiagnostics} form, of the category's own table. Azure delivers within minutes; the emulator delivers at once.
      */
     void onResourceLog(@Observes ResourceLogRecord log) {
         if (!config.services().monitor().enabled()) {
@@ -795,8 +795,8 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
             if (workspaceResourceId == null) {
                 continue;
             }
-            boolean dedicated = "Dedicated".equalsIgnoreCase(setting.property("logAnalyticsDestinationType"))
-                && log.dedicatedTable() != null;
+            boolean dedicated = log.dedicatedTable() != null && (log.dedicatedOnly()
+                || "Dedicated".equalsIgnoreCase(setting.property("logAnalyticsDestinationType")));
             ArmResourceId.parse(workspaceResourceId)
                 .filter(id -> WORKSPACE_TYPE.equalsIgnoreCase(id.typePath()))
                 .flatMap(workspaces::get)

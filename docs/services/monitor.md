@@ -258,17 +258,19 @@ tenant and management-group entries (no subscription), are not exported.
 
 ## Resource logs
 
-A service's resource log records (today Key Vault's `AuditEvent`, see [Key Vault](key-vault.md#audit-logs)) go
+A service's resource log records (Key Vault's `AuditEvent`, see [Key Vault](key-vault.md#audit-logs), and Blob
+storage's `StorageRead`, `StorageWrite` and `StorageDelete`, see [Blob](blob.md#resource-logs)) go
 through every diagnostic setting of the resource with an enabled log entry naming the record's category or one of
 its category groups, as they are recorded:
 
 - **Storage account**: one line of JSON per record in the hourly append blob
   `insights-logs-{category}/resourceId={RESOURCE ID}/y={yyyy}/m={MM}/d={dd}/h={HH}/m=00/PT1H.json`, the resource id
-  uppercased.
+  uppercased as the resource logs reference writes it, except for Blob storage, whose paths keep the id's case.
 - **Event Hubs**: an event `{"records": [<record>]}` to the setting's `eventHubName`, else to
   `insights-logs-{category}` (`insights-logs-auditevent`); the hub must be declared in the namespace's entities.
 - **Log Analytics**: a row of the shared `AzureDiagnostics` table, or, for a setting whose
-  `logAnalyticsDestinationType` is `Dedicated`, of the category's own table (`AZKVAuditLogs`). An `AzureDiagnostics`
+  `logAnalyticsDestinationType` is `Dedicated`, of the category's own table (`AZKVAuditLogs`). Blob storage's logs
+  have no `AzureDiagnostics` form and always go to `StorageBlobLogs`. An `AzureDiagnostics`
   row carries `ResourceId`, `ResourceGroup`, `ResourceProvider`, `ResourceType` and `Resource` uppercased,
   `_ResourceId` lowercased, the schema's columns (`OperationName`, `ResultType`, `ResultSignature`,
   `ResultDescription`, `CorrelationId`, `CallerIPAddress`, `OperationVersion`, `DurationMs`), and every other field
