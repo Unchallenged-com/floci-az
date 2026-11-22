@@ -129,14 +129,17 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
 
     private final ActivityLogEndpoint activityLog;
     private final ActivityLogExport export;
+    private final ActivityLogStorageExport storageExport;
     private final CloudDefaults defaults;
 
     @Inject
     public MonitorHandler(StorageFactory factory, EmulatorConfig config,
                           @ConfigProperty(name = "quarkus.http.limits.max-body-size", defaultValue = "2G")
                           MemorySize maxBodySize,
-                          CloudDefaults defaults, ActivityLogEndpoint activityLog, ActivityLogExport export) {
+                          CloudDefaults defaults, ActivityLogEndpoint activityLog, ActivityLogExport export,
+                          ActivityLogStorageExport storageExport) {
         this.export = export;
+        this.storageExport = storageExport;
         this.defaults = defaults;
         this.activityLog = activityLog;
         this.store = factory.create("monitor");
@@ -707,8 +710,8 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
 
     /**
      * Exports an Activity Log entry, as it is recorded, through every diagnostic setting of its subscription that takes
-     * its category: an {@code AzureActivity} row in the setting's Log Analytics workspace. Azure delivers within
-     * minutes; the emulator delivers at once.
+     * its category: an {@code AzureActivity} row in the setting's Log Analytics workspace, and a line of the hourly
+     * blob in its storage account. Azure delivers within minutes; the emulator delivers at once.
      */
     void onActivityLogEntry(@Observes ActivityLogEvent event) {
         if (!config.services().monitor().enabled() || event.subscriptionId() == null) {
@@ -729,6 +732,10 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
         }
         ActivityLogExport.Exported exported = export.export(event);
         for (MonitorResource setting : settings) {
+            String storageAccountId = setting.property("storageAccountId");
+            if (storageAccountId != null) {
+                storageExport.deliver(storageAccountId, exported);
+            }
             String workspaceResourceId = setting.property("workspaceId");
             if (workspaceResourceId == null) {
                 continue;

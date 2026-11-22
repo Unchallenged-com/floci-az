@@ -231,6 +231,12 @@ tenant and management-group entries (no subscription), are not exported.
   `TimeGenerated` and `EventSubmissionTimestamp`, `TenantId` the workspace id, `SourceSystem` `Azure` and `Type`
   `AzureActivity`. The deprecated columns (`OperationName`, `Category`, `ActivityStatus`, `ActivitySubstatus`,
   `ResourceId`, `ResourceProvider`, `Resource`, `OperationId`) are empty.
+- **Storage account** (`storageAccountId`): each entry's exported record is appended, as one line of JSON (no
+  `records` wrapper), to the append blob
+  `insights-activity-logs/resourceId=/SUBSCRIPTIONS/{SUBSCRIPTION ID}/y={yyyy}/m={MM}/d={dd}/h={HH}/m=00/PT1H.json`
+  of the setting's storage account, one blob per hour in UTC; the container and the blob are created on first use and
+  read back through the Blob service. The hour is the entry's own time, which with an immediate delivery is also the
+  time it is written; Azure's documentation names the "original generation time" without saying which.
 - **The exported record**, the resource-log schema storage accounts and event hubs receive, is built once per entry:
   `time`, `resourceId` and `operationName` uppercased, `category`, `resultType` (`Start`, `Success`, `Failure`),
   `resultSignature` (`Started.`, `Succeeded.Created`), `durationMs` as a string (`0` on a start, the time since the
@@ -240,8 +246,8 @@ tenant and management-group entries (no subscription), are not exported.
 - **Not reproduced**: the undocumented `RoleLocation`, `Stamp` and `ReleaseVersion` fields, `properties.requestbody`
   and `responseBody`, `identity.authorization.evidence` (role assignments are not evaluated), and the `audit`
   category group of a subscription setting. A failed entry's `resultSignature` is `Failed.{subStatus}`, as the
-  table's columns imply; no exported failure record was found to confirm it. The storage account and Event Hubs
-  destinations are not served yet.
+  table's columns imply; no exported failure record was found to confirm it. The Event Hubs destination is not
+  served yet.
 
 ## Supported KQL subset
 
