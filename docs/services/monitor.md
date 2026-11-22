@@ -171,12 +171,14 @@ curl -s "http://localhost:4577/subscriptions/00000000-0000-0000-0000-00000000000
   with an opaque `$skiptoken`. Entries are newest first.
 - **`Policy` entries**: a `deny` or `audit` that [Azure Policy](policy.md) applies to a write is recorded in the
   write's operation (same `correlationId`, caller, claims and `authorization`) as a `Policy` category `EndRequest`
-  entry, `Microsoft.Authorization/policies/deny/action` (`Failed`, `Error`, written before the write's own failed
-  `EndRequest`) or `Microsoft.Authorization/policies/audit/action` (`Succeeded`, `Warning`, once the write
-  succeeded). Its `properties` carry `isComplianceCheck` `False`, the resource's `resourceLocation`, the
-  management groups above its subscription as `ancestors` (parent first, the tenant root last) and the
-  definitions that fired as the `policies` JSON: definition, initiative, assignment and effect (`Deny`, `Audit`).
-  An `append` leaves no entry, as Azure's operations list has no `policies/append/action`.
+  entry with an empty `subStatus`, written as the write is evaluated, before its handler runs, so between the
+  write's `BeginRequest` and `EndRequest`: `Microsoft.Authorization/policies/deny/action` (`Failed`, `Error`; the
+  write then fails with `RequestDisallowedByPolicy`) or `Microsoft.Authorization/policies/audit/action`
+  (`Succeeded`, `Warning`; the entry stands whatever the write's outcome). Its `properties` carry
+  `isComplianceCheck` `False`, the resource's `resourceLocation`, the management groups above its subscription as
+  `ancestors` (parent first, the tenant root last) and the definitions that fired as the `policies` JSON:
+  definition, initiative, assignment and effect (`Deny`, `Audit`). An `append` leaves no entry, as Azure's
+  operations list has no `policies/append/action`.
 - Any `api-version` is accepted, the stable `2015-04-01` and the `2017-03-01-preview` alike.
 
 ## Supported KQL subset

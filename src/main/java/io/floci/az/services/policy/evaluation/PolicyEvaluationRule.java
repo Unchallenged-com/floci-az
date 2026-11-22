@@ -9,7 +9,6 @@ import io.floci.az.core.arm.ArmErrors;
 import io.floci.az.core.arm.ArmRequestRule;
 import io.floci.az.core.arm.ArmVerdict;
 import io.floci.az.core.auth.BearerClaims;
-import io.floci.az.services.monitor.activitylog.ActivityLog;
 import io.floci.az.services.policy.evaluation.PolicyEngine.Match;
 import io.floci.az.services.policy.evaluation.PolicyEngine.Outcome;
 import io.floci.az.services.policyinsights.ComplianceStore;
@@ -26,7 +25,6 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -35,7 +33,8 @@ import java.util.UUID;
  * a matching {@code deny} answers {@code 403 RequestDisallowedByPolicy} in the handler's place, a matching
  * {@code append} amends the body the handler then reads, and a matching {@code audit} is recorded once the
  * handler has answered. Every effect that fires is kept in the {@link PolicyEvaluationLog}, and a deny or an audit is
- * written to the Activity Log as a {@code Policy} entry of the write's operation ({@link PolicyActivity}).
+ * written to the Activity Log as a {@code Policy} entry of the write's operation ({@link PolicyActivity}) as it is
+ * evaluated, before the handler runs.
  *
  * <p>Off under {@code floci-az.services.policy.enforcement=false}, and when the policy service is disabled.
  */
@@ -62,7 +61,7 @@ public class PolicyEvaluationRule implements ArmRequestRule {
     private final Set<ArmCall> deletions = Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
 
     private record Pending(PolicyEngine.Request request, List<Match> audits, String caller, String correlationId,
-                           List<PolicyEngine.Evaluation> evaluations, Optional<ActivityLog.RequestFacts> operation) {
+                           List<PolicyEngine.Evaluation> evaluations) {
     }
 
     private final ComplianceStore compliance;
@@ -157,8 +156,10 @@ public class PolicyEvaluationRule implements ArmRequestRule {
         for (Match append : appends) {
             log.record(event(evaluation, append, "append", "Informational", "Succeeded", caller, correlationId));
         }
-        pending.put(call, new Pending(evaluation, audits, caller, correlationId, outcome.evaluations(),
-            audits.isEmpty() ? Optional.empty() : activity.operation(call)));
+        // Azure adds the audit operation to the Activity Log as it evaluates the request, before the resource provider
+        // runs: the entry stands whatever the write's outcome.
+        activity.record(activity.operation(call), call, "audit", audits, evaluation.content());
+        pending.put(call, new Pending(evaluation, audits, caller, correlationId, outcome.evaluations()));
         return ArmVerdict.proceed();
     }
 
@@ -178,7 +179,6 @@ public class PolicyEvaluationRule implements ArmRequestRule {
         for (Match match : admitted.audits()) {
             log.record(event(admitted.request(), match, "audit", "Warning", "Succeeded", admitted.caller(), admitted.correlationId()));
         }
-        activity.record(admitted.operation(), call, "audit", admitted.audits(), admitted.request().content());
         // A tags-only PATCH is evaluated against the tag-inspecting definitions only, so the verdicts of the
         // others stand; any other write re-evaluated everything and replaces the resource's records.
         if (!admitted.request().tagsOnly()) {

@@ -125,7 +125,7 @@ class PolicyActivityLogTest {
     }
 
     @Test
-    void anAuditIsASucceededPolicyEntryAtWarningLevelOnceTheWriteSucceeded() throws Exception {
+    void anAuditIsASucceededPolicyEntryAtWarningLevelWrittenAsTheWriteIsEvaluated() throws Exception {
         definition("tls-audit", "audit");
         assertTrue(List.of(200, 201).contains(storageAccount("saaudit", "TLS1_0", "corr-audit")));
         assertTrue(List.of(200, 201).contains(storageAccount("sacompliant", "TLS1_2", "corr-compliant")));
@@ -133,10 +133,35 @@ class PolicyActivityLogTest {
         JsonPath policy = log("category eq 'Policy'");
         assertEquals(1, policy.getList("value").size(), "only the non-compliant write is audited");
         assertEquals("Microsoft.Authorization/policies/audit/action", policy.getString("value[0].operationName.value"));
+        assertEquals("EndRequest", policy.getString("value[0].eventName.value"));
         assertEquals("Warning", policy.getString("value[0].level"));
         assertEquals("Succeeded", policy.getString("value[0].status.value"));
+        assertEquals("", policy.getString("value[0].subStatus.value"));
         assertEquals("corr-audit", policy.getString("value[0].correlationId"));
         assertEquals("Audit", policies(policy, "value[0]").get(0).get("policyDefinitionEffect").asText());
+
+        JsonPath operation = log("correlationId eq 'corr-audit'");
+        assertEquals(List.of("Administrative", "Policy", "Administrative"), operation.getList("value.category.value"),
+                "the audit is written as the write is evaluated, before the provider answers it");
+        assertEquals(List.of("EndRequest", "EndRequest", "BeginRequest"), operation.getList("value.eventName.value"));
+    }
+
+    @Test
+    void anAuditStandsWhenTheProviderThenFailsTheWrite() {
+        definition("tls-audit", "audit");
+        assertTrue(List.of(200, 201).contains(storageAccount("saauditfail", "TLS1_2", "corr-audit-created")));
+        // Admitted by the gate and audited, then refused by the storage provider: isHnsEnabled cannot change.
+        int status = given().header("x-ms-correlation-request-id", "corr-audit-failed").contentType("application/json")
+                .body("{\"location\": \"eastus\", \"kind\": \"StorageV2\", \"sku\": {\"name\": \"Standard_LRS\"},"
+                        + " \"properties\": {\"minimumTlsVersion\": \"TLS1_0\", \"isHnsEnabled\": true}}")
+                .when().put(RG_SCOPE + "/providers/Microsoft.Storage/storageAccounts/saauditfail" + STORAGE_API)
+                .then().extract().statusCode();
+        assertEquals(400, status);
+
+        JsonPath operation = log("correlationId eq 'corr-audit-failed'");
+        assertEquals(List.of("Administrative", "Policy", "Administrative"), operation.getList("value.category.value"));
+        assertEquals("Microsoft.Authorization/policies/audit/action", operation.getString("value[1].operationName.value"));
+        assertEquals("Failed", operation.getString("value[0].status.value"), "the write itself failed");
     }
 
     @Test
