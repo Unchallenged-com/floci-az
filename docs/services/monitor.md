@@ -237,6 +237,13 @@ tenant and management-group entries (no subscription), are not exported.
   of the setting's storage account, one blob per hour in UTC; the container and the blob are created on first use and
   read back through the Blob service. The hour is the entry's own time, which with an immediate delivery is also the
   time it is written; Azure's documentation names the "original generation time" without saying which.
+- **Event Hubs** (`eventHubAuthorizationRuleId`, with `eventHubName`): each entry is sent as an event whose body is
+  `{"records": [<exported record>]}` to the setting's `eventHubName`, or, when the setting names no hub, to
+  `insights-logs-operational-logs`, the hub Azure's documentation says Azure Monitor creates for the Activity Log.
+  The namespace is the one the authorization rule's id names; its broker must be running and declare the hub in its
+  entities (`FLOCI_AZ_SERVICES_EVENT_HUB_ENTITIES`, or the namespace's `entities`), since floci-az does not create
+  the hub as Azure does. Events are sent in the background, in order, without a partition key; one event carries one
+  record. Some consumers wait on a hub named `insights-activity-logs` instead, which no Microsoft source names.
 - **The exported record**, the resource-log schema storage accounts and event hubs receive, is built once per entry:
   `time`, `resourceId` and `operationName` uppercased, `category`, `resultType` (`Start`, `Success`, `Failure`),
   `resultSignature` (`Started.`, `Succeeded.Created`), `durationMs` as a string (`0` on a start, the time since the
@@ -246,8 +253,8 @@ tenant and management-group entries (no subscription), are not exported.
 - **Not reproduced**: the undocumented `RoleLocation`, `Stamp` and `ReleaseVersion` fields, `properties.requestbody`
   and `responseBody`, `identity.authorization.evidence` (role assignments are not evaluated), and the `audit`
   category group of a subscription setting. A failed entry's `resultSignature` is `Failed.{subStatus}`, as the
-  table's columns imply; no exported failure record was found to confirm it. The Event Hubs destination is not
-  served yet.
+  table's columns imply; no exported failure record was found to confirm it. Azure batches several records into
+  one event and documents no batch size; the event's content type is not documented either, and none is set.
 
 ## Supported KQL subset
 

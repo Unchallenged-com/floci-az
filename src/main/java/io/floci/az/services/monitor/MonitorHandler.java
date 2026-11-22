@@ -130,6 +130,7 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
     private final ActivityLogEndpoint activityLog;
     private final ActivityLogExport export;
     private final ActivityLogStorageExport storageExport;
+    private final ActivityLogEventHubExport eventHubExport;
     private final CloudDefaults defaults;
 
     @Inject
@@ -137,9 +138,10 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
                           @ConfigProperty(name = "quarkus.http.limits.max-body-size", defaultValue = "2G")
                           MemorySize maxBodySize,
                           CloudDefaults defaults, ActivityLogEndpoint activityLog, ActivityLogExport export,
-                          ActivityLogStorageExport storageExport) {
+                          ActivityLogStorageExport storageExport, ActivityLogEventHubExport eventHubExport) {
         this.export = export;
         this.storageExport = storageExport;
+        this.eventHubExport = eventHubExport;
         this.defaults = defaults;
         this.activityLog = activityLog;
         this.store = factory.create("monitor");
@@ -710,8 +712,9 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
 
     /**
      * Exports an Activity Log entry, as it is recorded, through every diagnostic setting of its subscription that takes
-     * its category: an {@code AzureActivity} row in the setting's Log Analytics workspace, and a line of the hourly
-     * blob in its storage account. Azure delivers within minutes; the emulator delivers at once.
+     * its category: an {@code AzureActivity} row in the setting's Log Analytics workspace, a line of the hourly blob
+     * in its storage account, and an event in its event hub. Azure delivers within minutes; the emulator delivers at
+     * once.
      */
     void onActivityLogEntry(@Observes ActivityLogEvent event) {
         if (!config.services().monitor().enabled() || event.subscriptionId() == null) {
@@ -735,6 +738,10 @@ public class MonitorHandler implements AzureServiceHandler, Resettable, ArmProvi
             String storageAccountId = setting.property("storageAccountId");
             if (storageAccountId != null) {
                 storageExport.deliver(storageAccountId, exported);
+            }
+            String eventHubRule = setting.property("eventHubAuthorizationRuleId");
+            if (eventHubRule != null) {
+                eventHubExport.deliver(eventHubRule, setting.property("eventHubName"), exported);
             }
             String workspaceResourceId = setting.property("workspaceId");
             if (workspaceResourceId == null) {
