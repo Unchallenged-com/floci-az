@@ -9,7 +9,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -153,6 +160,55 @@ class BlobResourceLogsTest {
         assertEquals(BlobResourceLogs.sha256(token), create.get("AuthenticationHash"));
         assertEquals("https://storage.azure.com", create.get("RequesterAudience"));
         assertEquals("00000000-0000-0000-0000-000000000002", create.get("RequesterTenantId"));
+    }
+
+    @Test
+    void anAccountKeyRequestCarriesTheHashOfTheKeyThatSignedIt() throws Exception {
+        setting("{\"properties\": {\"workspaceId\": \"" + WORKSPACE
+                + "\", \"logs\": [{\"category\": \"StorageRead\", \"enabled\": true},"
+                + " {\"category\": \"StorageWrite\", \"enabled\": true}]}}");
+        JsonPath keys = given().when()
+                .post(RG + "/providers/Microsoft.Storage/storageAccounts/" + ACCOUNT + "/listKeys?api-version=2023-01-01")
+                .then().statusCode(200).extract().jsonPath();
+        String key1 = keys.getString("keys[0].value");
+        String key2 = keys.getString("keys[1].value");
+        blob("c-k-create").when().put("/" + ACCOUNT + "/docs?restype=container").then().statusCode(201);
+        blob("c-k-put").header("x-ms-blob-type", "BlockBlob").body("patient record")
+                .when().put("/" + ACCOUNT + "/docs/record.txt").then().statusCode(201);
+
+        String date = DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC).format(Instant.now());
+        String stringToSign = "GET\n\n\n\n\n\n\n\n\n\n\n\nx-ms-client-request-id:c-k-shared\nx-ms-date:" + date
+                + "\nx-ms-version:2024-11-04\n/" + ACCOUNT + "/" + ACCOUNT + "/docs\nrestype:container";
+        given().header("Authorization", "SharedKey " + ACCOUNT + ":" + hmac(key2, stringToSign))
+                .header("x-ms-date", date).header("x-ms-version", "2024-11-04")
+                .header("x-ms-client-request-id", "c-k-shared")
+                .when().get("/" + ACCOUNT + "/docs?restype=container").then().statusCode(200);
+
+        String expiry = Instant.now().plusSeconds(3600).toString().replaceAll("\\.\\d+Z$", "Z");
+        String serviceSig = hmac(key1, "r\n\n" + expiry + "\n/blob/" + ACCOUNT + "/docs/record.txt\n\n\n\n2020-12-06\nb\n\n\n\n\n\n\n");
+        given().queryParams(Map.of("sv", "2020-12-06", "sp", "r", "sr", "b", "se", expiry, "sig", serviceSig))
+                .header("x-ms-client-request-id", "c-k-sas")
+                .when().get("/" + ACCOUNT + "/docs/record.txt").then().statusCode(200);
+
+        String accountSig = hmac(key2, ACCOUNT + "\nr\nb\no\n\n" + expiry + "\n\n\n2022-11-02\n\n");
+        given().queryParams(Map.of("sv", "2022-11-02", "ss", "b", "srt", "o", "sp", "r", "se", expiry, "sig", accountSig))
+                .header("x-ms-client-request-id", "c-k-account")
+                .when().get("/" + ACCOUNT + "/docs/record.txt").then().statusCode(200);
+
+        assertEquals("", only("c-k-create").get("AuthenticationHash"), "a signature no key made names no key");
+        assertEquals("AccountKey", only("c-k-shared").get("AuthenticationType"));
+        assertEquals("key2(" + BlobResourceLogs.sha256(key2) + ")", only("c-k-shared").get("AuthenticationHash"));
+        assertEquals("SAS", only("c-k-sas").get("AuthenticationType"));
+        assertEquals("key1(" + BlobResourceLogs.sha256(key1) + "),SasSignature(" + BlobResourceLogs.sha256(serviceSig)
+                + ")", only("c-k-sas").get("AuthenticationHash"));
+        assertEquals("key2(" + BlobResourceLogs.sha256(key2) + "),SasSignature(" + BlobResourceLogs.sha256(accountSig)
+                + ")", only("c-k-account").get("AuthenticationHash"));
+    }
+
+    private static String hmac(String key, String stringToSign) throws Exception {
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(Base64.getDecoder().decode(key), "HmacSHA256"));
+        return Base64.getEncoder().encodeToString(mac.doFinal(stringToSign.getBytes(StandardCharsets.UTF_8)));
     }
 
     @Test

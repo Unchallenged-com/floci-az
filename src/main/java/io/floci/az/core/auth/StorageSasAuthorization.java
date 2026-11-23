@@ -35,6 +35,24 @@ public class StorageSasAuthorization {
         this.keys = keys;
     }
 
+    /**
+     * The account key ({@code key1} or {@code key2}) whose signature an account or service SAS for the request
+     * carries; empty for a user delegation SAS, or when no current key signed it.
+     */
+    public Optional<String> signer(AzureRequest request, String container, String path, StorageSasToken token) {
+        if (token.isUserDelegation()) {
+            return Optional.empty();
+        }
+        try {
+            String stringToSign = token.isAccountSas() ? token.accountStringToSign(request.accountName())
+                    : serviceStringToSign(token, canonicalName(request.accountName(), container,
+                            signedPath(token, path)));
+            return keys.signer(request.accountName(), stringToSign, token.signature());
+        } catch (DateTimeParseException e) {
+            return Optional.empty();
+        }
+    }
+
     /** The {@code AuthenticationErrorDetail} of a SAS no key signed: the string the service signed. */
     public static String signatureMismatch(String stringToSign) {
         return "Signature did not match. String to sign used was " + stringToSign;

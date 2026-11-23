@@ -4,6 +4,9 @@ import io.floci.az.core.AuthType;
 import io.floci.az.core.AzureRequest;
 import io.floci.az.core.RequestUrls;
 import io.floci.az.core.auth.BearerClaims;
+import io.floci.az.core.auth.StorageAccountKeys;
+import io.floci.az.core.auth.StorageSasAuthorization;
+import io.floci.az.core.auth.StorageSasToken;
 import io.floci.az.core.cloud.CloudCatalog;
 import io.floci.az.core.cloud.CloudProfile;
 import io.floci.az.services.monitor.ResourceLogRecord;
@@ -55,11 +58,16 @@ public class BlobResourceLogs {
 
     private final StorageAccountArmService accounts;
     private final Event<ResourceLogRecord> logs;
+    private final StorageAccountKeys keys;
+    private final StorageSasAuthorization sasAuthorization;
 
     @Inject
-    public BlobResourceLogs(StorageAccountArmService accounts, Event<ResourceLogRecord> logs) {
+    public BlobResourceLogs(StorageAccountArmService accounts, Event<ResourceLogRecord> logs, StorageAccountKeys keys,
+                            StorageSasAuthorization sasAuthorization) {
         this.accounts = accounts;
         this.logs = logs;
+        this.keys = keys;
+        this.sasAuthorization = sasAuthorization;
     }
 
     void record(AzureRequest req, Response response, Instant start, long durationMs) {
@@ -108,7 +116,10 @@ public class BlobResourceLogs {
         }
         String requestId = response.getHeaderString("x-ms-request-id");
         record.put("correlationId", requestId == null ? UUID.randomUUID().toString() : requestId);
-        record.put("identity", identity(req, type));
+        Map<String, Object> identity = identity(req, type);
+        keyHash(req, container, path.contains("/") ? path.split("/", 2)[1] : "")
+            .ifPresent(hash -> identity.put("tokenHash", hash));
+        record.put("identity", identity);
         if (account.get().location() != null) {
             record.put("location", account.get().location());
         }
@@ -276,6 +287,30 @@ public class BlobResourceLogs {
             identity.put("requester", requester);
         }
         return identity;
+    }
+
+    /**
+     * {@code identity.tokenHash} of a request an account key signed: "key1 | key2 (SHA256 hash of the key)" for
+     * Shared Key, followed by ",SasSignature(SHA 256 hash of the SAS token)" for a SAS. The key is hashed as its
+     * base64 text, and the SAS as its {@code sig} value, URL-decoded. Empty when no current key signed the request.
+     */
+    private Optional<String> keyHash(AzureRequest req, String container, String blob) {
+        if (req.authContext() == null) {
+            return Optional.empty();
+        }
+        AuthType type = req.authContext().type();
+        Optional<StorageSasToken> sas = req.authContext().storageSas();
+        Optional<String> signer = req.authContext().signingKey();
+        if (type == AuthType.SAS && signer.isEmpty() && sas.isPresent()) {
+            signer = sasAuthorization.signer(req, container, blob, sas.get());
+        }
+        if (signer.isEmpty() || (type != AuthType.SHARED_KEY && type != AuthType.SAS)) {
+            return Optional.empty();
+        }
+        String keyHash = signer.get() + "(" + sha256(keys.value(req.accountName(), signer.get())) + ")";
+        return Optional.of(type == AuthType.SAS && sas.isPresent()
+            ? keyHash + ",SasSignature(" + sha256(sas.get().signature()) + ")"
+            : keyHash);
     }
 
     /** The metric response type: {@code Success}, or the class of the failure, as the record's properties carry it. */

@@ -189,7 +189,8 @@ or the `audit` or `allLogs` group; see [Resource logs](monitor.md#resource-logs)
   `durationMs` as numbers, `statusText` (`Success`, or the error code such as `BlobNotFound`), `callerIpAddress`,
   `correlationId` (the `x-ms-request-id` the service answered with), `identity` (`type`: `AccountKey`, `SAS`,
   `DelegationSAS`, `OAuth` or `Anonymous`; for OAuth, `tokenHash`, the SHA-256 of the token in uppercase hex, and the
-  token's `requester`), `location`, `properties`
+  token's `requester`; for a request an account key signed, `tokenHash` `key1(<SHA-256 of the key>)` or `key2(...)`,
+  followed for a SAS by `,SasSignature(<SHA-256 of its sig>)`), `location`, `properties`
   (`accountName`, `userAgentHeader`, `referrerHeader`, `clientRequestId`, `etag`, `serviceType` `blob`, `objectKey`,
   `metricResponseType`, `serverLatencyMs`, `requestHeaderSize` and `responseHeaderSize` (the bytes of the header
   lines), `requestBodySize`, `responseBodySize`, `tlsVersion` `TLS 1.2` over HTTPS), `uri`,
@@ -199,8 +200,8 @@ or the `audit` or `allLogs` group; see [Resource logs](monitor.md#resource-logs)
 - **Not logged**, as the Blob monitoring reference says: activity in the `insights-logs-` containers and the
   service's own writes of the log lines. Failed anonymous requests are logged, as exported records show, although the
   reference says only some are. Requests to an account no management plane account names are not logged either.
-- **Not reproduced**: the `tokenHash` of an account key or SAS request (the emulator's `key1` and `key2` are the same
-  key, so which one signed cannot be told), `identity.authorization` (role assignments are not evaluated), and the
+- **Not reproduced**: the `tokenHash` of a request no current key signed (accepted without
+  `strict-storage-keys`) and of a user delegation SAS, `identity.authorization` (role assignments are not evaluated), and the
   MD5 and tier fields. Azure documents a latency of 3 to 10 minutes for resource logs; floci-az delivers at once. Azure
   also refuses to send an account's logs to the account itself; floci-az accepts the setting.
 
