@@ -406,9 +406,27 @@ diagnostic settings (`{vaultId}/providers/Microsoft.Insights/diagnosticSettings/
   delete and `secretProperties` for a secret update), `resourceId` (the vault's, uppercased), `operationVersion`
   (the `api-version`), `resultSignature` (the status's reason phrase: `OK`, `Not Found`, `Forbidden`),
   `resultDescription` (the error's message, on a failure only) and `durationMs`, as a string.
-- **Not logged**: management-plane vault operations (`VaultGet`, `VaultPut`, ...), Managed HSM requests, and requests
-  to a vault no management-plane vault names. Azure documents a latency of up to 10 minutes; floci-az delivers at
-  once.
+- **Vault operations**: a Resource Manager request on a vault itself is `VaultGet`, `VaultPut`, `VaultPatch` or
+  `VaultDelete`, and a `createMode: recover` PUT that recovers a deleted vault is `VaultRecover`. Its record has the
+  same fields, with `properties.id` the vault's URI, `clientInfo` the caller's `User-Agent` and `requestUri` the
+  Resource Manager URI; `correlationId` is the `x-ms-client-request-id` header, empty when the client sends none, and
+  there is no `isAccessPolicyMatch`, `isRbacAuthorized` or `tlsVersion`. `VaultGet` and `VaultPatch` also carry the
+  vault's settings as the request leaves them, under `properties.properties`: `sku` (`Family`, `Name` capitalized,
+  `Capacity` null), `tenantId`, `networkAcls` (`bypass` and `defaultAction`, null when unset), `enabledForDeployment`,
+  `enabledForDiskEncryption`, `enabledForTemplateDeployment`, `enableSoftDelete`, `softDeleteRetentionInDays`,
+  `enableRbacAuthorization` and `enablePurgeProtection` (null when unset). In `AZKVAuditLogs` they are the `Sku`,
+  `NetworkAcls`, `EnabledFor...`, `EnableSoftDelete`, `SoftDeleteRetentionInDays`, `EnableRbacAuthorization` and
+  `EnablePurgeProtection` columns; in `AzureDiagnostics`, `properties_sku_Family_s`,
+  `properties_enableRbacAuthorization_b` and so on.
+- **Not emulated**: no public record shows their shape, so these are left out rather than guessed:
+  - the `addedAccessPolicy` and `removedAccessPolicy` properties Azure adds to `VaultPatch` when an access policy
+    entry changes;
+  - a record for `accessPolicies/{add|replace|remove}`, whose operation name is undocumented;
+  - `properties.properties` on `VaultPut`, `VaultRecover` and `VaultDelete`;
+  - IP and virtual network rules in `networkAcls`, and the `VaultProperties` column of `AZKVAuditLogs`.
+- **Not logged**: vault listings, deleted vault and name availability operations, Managed HSM requests, and
+  data-plane requests to a vault no management-plane vault names. Azure documents a latency of up to 10 minutes;
+  floci-az delivers at once.
 
 ## Intentional deviations
 

@@ -28,6 +28,9 @@ import java.util.UUID;
  * field table and exported records captured in 2024: {@code resultType} is {@code Success} whatever the status,
  * {@code resultSignature} the status's reason phrase, {@code durationMs} a string, {@code resultDescription} only on
  * a failure, and {@code properties.id} the URI of the object the request named.
+ *
+ * <p>Requests on a vault itself, which Resource Manager hands to Key Vault, are recorded too ({@link #vaultRecord}):
+ * {@code VaultGet}, {@code VaultPut}, {@code VaultPatch}, {@code VaultDelete} and {@code VaultRecover}.
  */
 @ApplicationScoped
 public class KeyVaultAudit {
@@ -38,6 +41,10 @@ public class KeyVaultAudit {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     /** The TLS version exported records of HTTPS requests carry. */
     private static final String TLS_VERSION = "TLS1_2";
+    /** The {@code AZKVAuditLogs} columns of a vault operation's settings, each the setting of the same name. */
+    private static final List<String> VAULT_COLUMNS = List.of("Sku", "NetworkAcls", "EnabledForDeployment",
+        "EnabledForDiskEncryption", "EnabledForTemplateDeployment", "EnableSoftDelete", "SoftDeleteRetentionInDays",
+        "EnableRbacAuthorization", "EnablePurgeProtection");
 
     private final KeyVaultArmService vaults;
     private final Event<ResourceLogRecord> logs;
@@ -107,6 +114,100 @@ public class KeyVaultAudit {
 
         logs.fire(new ResourceLogRecord(vault.get().id().id(), CATEGORY, GROUPS, start, record, TABLE,
             dedicatedRow(record, vault.get().id().id(), start)));
+    }
+
+    /**
+     * The record of a request on the vault {@code vault} itself, which Resource Manager handed to Key Vault and
+     * which was answered with {@code response}. {@code vault} is the vault's document as the request leaves it (as it
+     * was, for a {@code VaultDelete}), or null when there is none; {@code vaultId} is the id the request addressed.
+     *
+     * <p>As the reference's {@code VaultGet} example and records exported in 2024 show: {@code properties.id} is the
+     * vault's URI, {@code clientInfo} the caller's {@code User-Agent}, {@code requestUri} the Resource Manager URI,
+     * and {@code VaultGet} and {@code VaultPatch} also carry the vault's settings under {@code properties.properties}.
+     * The record carries no access check and no TLS version, and {@code correlationId} is empty when the client sent
+     * no {@code x-ms-client-request-id}.
+     */
+    static ResourceLogRecord vaultRecord(AzureRequest req, String operation, String vaultId, Map<String, Object> vault,
+                                         Response response, Instant start, long durationMs) {
+        int status = response == null ? 500 : response.getStatus();
+        Map<String, Object> body = response == null ? Map.of() : body(response);
+        Map<String, Object> settings = vault != null && vault.get("properties") instanceof Map<?, ?> map
+            ? cast(map) : Map.of();
+        String resourceId = vault != null && vault.get("id") instanceof String id ? id : vaultId;
+
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("time", start.toString());
+        record.put("category", CATEGORY);
+        record.put("operationName", operation);
+        record.put("resultType", "Success");
+        String clientRequestId = req.headers() == null ? null : req.headers().getHeaderString("x-ms-client-request-id");
+        record.put("correlationId", clientRequestId == null ? "" : clientRequestId.trim());
+        record.put("callerIpAddress", req.remoteAddress());
+        record.put("identity", Map.of("claim", BearerClaims.of(req).values()));
+        Map<String, Object> properties = new LinkedHashMap<>();
+        if (settings.get("vaultUri") != null) {
+            properties.put("id", settings.get("vaultUri"));
+        }
+        String userAgent = req.headers() == null ? null : req.headers().getHeaderString("User-Agent");
+        properties.put("clientInfo", userAgent == null ? "" : userAgent);
+        properties.put("requestUri", (req.secure() ? "https://" : "http://") + RequestUrls.resolveAuthority(req) + "/"
+            + (req.rawPath() == null ? "" : req.rawPath()) + (req.rawQuery() == null ? "" : "?" + req.rawQuery()));
+        properties.put("httpStatusCode", status);
+        if (status / 100 == 2 && !settings.isEmpty()
+                && ("VaultGet".equals(operation) || "VaultPatch".equals(operation))) {
+            properties.put("properties", vaultSettings(settings));
+        }
+        record.put("properties", properties);
+        record.put("resourceId", resourceId.toUpperCase(Locale.ROOT));
+        String apiVersion = req.queryParams() == null ? null : req.queryParams().get("api-version");
+        record.put("operationVersion", apiVersion == null ? "" : apiVersion);
+        record.put("resultSignature", reasonPhrase(status));
+        if (status >= 400 && errorMessage(body) != null) {
+            record.put("resultDescription", errorMessage(body));
+        }
+        record.put("durationMs", String.valueOf(durationMs));
+        return new ResourceLogRecord(resourceId, CATEGORY, GROUPS, start, record, TABLE,
+            dedicatedRow(record, resourceId, start));
+    }
+
+    /**
+     * {@code properties.properties} of a vault operation: the vault's settings in the shape exported records show,
+     * the SKU's {@code Family}, {@code Name} and {@code Capacity} capitalized, a setting the vault does not have as
+     * its default, {@code networkAcls} and {@code enablePurgeProtection} null when unset, and only the
+     * {@code bypass} and {@code defaultAction} of the network rules.
+     */
+    static Map<String, Object> vaultSettings(Map<String, Object> settings) {
+        Map<?, ?> sku = settings.get("sku") instanceof Map<?, ?> map ? map : Map.of();
+        String skuName = sku.get("name") == null ? null : String.valueOf(sku.get("name"));
+        Map<String, Object> skuOut = new LinkedHashMap<>();
+        skuOut.put("Family", sku.get("family"));
+        skuOut.put("Name", skuName == null || skuName.isEmpty() ? skuName
+            : skuName.substring(0, 1).toUpperCase(Locale.ROOT) + skuName.substring(1));
+        skuOut.put("Capacity", null);
+        Map<String, Object> networkAcls = null;
+        if (settings.get("networkAcls") instanceof Map<?, ?> acls) {
+            networkAcls = new LinkedHashMap<>();
+            putIfPresent(networkAcls, "bypass", acls.get("bypass"));
+            putIfPresent(networkAcls, "defaultAction", acls.get("defaultAction"));
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sku", skuOut);
+        out.put("tenantId", settings.get("tenantId"));
+        out.put("networkAcls", networkAcls);
+        out.put("enabledForDeployment", Boolean.TRUE.equals(settings.get("enabledForDeployment")));
+        out.put("enabledForDiskEncryption", Boolean.TRUE.equals(settings.get("enabledForDiskEncryption")));
+        out.put("enabledForTemplateDeployment", Boolean.TRUE.equals(settings.get("enabledForTemplateDeployment")));
+        out.put("enableSoftDelete", !Boolean.FALSE.equals(settings.get("enableSoftDelete")));
+        out.put("softDeleteRetentionInDays", settings.get("softDeleteRetentionInDays") instanceof Number days
+            ? days.intValue() : KeyVaultArmService.DEFAULT_RETENTION_DAYS);
+        out.put("enableRbacAuthorization", Boolean.TRUE.equals(settings.get("enableRbacAuthorization")));
+        out.put("enablePurgeProtection", settings.get("enablePurgeProtection"));
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> cast(Map<?, ?> map) {
+        return (Map<String, Object>) map;
     }
 
     /**
@@ -385,6 +486,14 @@ public class KeyVaultAudit {
             String field = Character.toLowerCase(key.charAt(0)) + key.substring(1);
             if (properties.get(field) != null) {
                 row.put(key, properties.get(field));
+            }
+        }
+        if (properties.get("properties") instanceof Map<?, ?> vault) {
+            for (String key : VAULT_COLUMNS) {
+                String field = Character.toLowerCase(key.charAt(0)) + key.substring(1);
+                if (vault.get(field) != null) {
+                    row.put(key, vault.get(field));
+                }
             }
         }
         row.put("SourceSystem", "Azure");

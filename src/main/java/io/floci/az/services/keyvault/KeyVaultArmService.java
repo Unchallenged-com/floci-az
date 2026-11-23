@@ -19,11 +19,14 @@ import io.floci.az.core.cloud.CloudProfile;
 import io.floci.az.core.cloud.CloudSuffix;
 import io.floci.az.core.directory.AzureDirectory;
 import io.floci.az.core.storage.StorageFactory;
+import io.floci.az.services.monitor.ResourceLogRecord;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -95,7 +98,7 @@ public class KeyVaultArmService implements ArmProviderService, StoreIndexSource,
     private static final String ORIGINAL_VAULT = "vault";
 
     /** The spec's default for {@code softDeleteRetentionInDays}. */
-    private static final int DEFAULT_RETENTION_DAYS = 90;
+    static final int DEFAULT_RETENTION_DAYS = 90;
 
     /**
      * The {@code VaultProperties} a client sets and reads back as they are. Stored only: the data plane enforces none
@@ -113,11 +116,13 @@ public class KeyVaultArmService implements ArmProviderService, StoreIndexSource,
     private final AzureDirectory directory;
 
     private final CloudDefaults defaults;
+    private final Event<ResourceLogRecord> logs;
 
     @Inject
     public KeyVaultArmService(StorageFactory storageFactory, GlobalNameRegistry names, AzureDirectory directory,
-                              CloudDefaults defaults) {
+                              CloudDefaults defaults, Event<ResourceLogRecord> logs) {
         this.defaults = defaults;
+        this.logs = logs;
         this.vaults = ArmResourceStore.create(storageFactory, STORE, VAULT_TYPE, documentType(),
             KeyVaultArmService::idOf, key -> false);
         this.hsms = ArmResourceStore.create(storageFactory, STORE, HSM_TYPE, documentType(),
@@ -235,17 +240,49 @@ public class KeyVaultArmService implements ArmProviderService, StoreIndexSource,
             : managedHsm(req, method, resourceId(sub, rg, "managedHSMs", name), name);
     }
 
+    /**
+     * A request on a vault itself, recorded in the vault's {@code AuditEvent} resource log under the logging
+     * reference's operation names: {@code VaultGet}, {@code VaultPut}, {@code VaultPatch}, {@code VaultDelete}, and
+     * {@code VaultRecover} for a {@code createMode: recover} PUT that recovers a deleted vault.
+     */
     private Response vault(AzureRequest req, String method, ArmResourceId id, String vaultName) {
-        return switch (method) {
-            case "PUT"    -> createOrUpdateVault(req, id);
-            case "PATCH"  -> updateVault(req, id);
-            case "GET"    -> get(vaults, id, "vaults/" + vaultName);
-            case "DELETE" -> {
-                vaults.delete(id).ifPresent(deleted -> softDelete(req, deleted));
-                yield Response.ok().build();
+        Instant start = Instant.now();
+        String operation;
+        Response response;
+        Map<String, Object> before = null;
+        switch (method) {
+            case "PUT" -> {
+                Map<String, Object> body = ArmJson.parseBodyLenient(req);
+                operation = isRecover(body) && !deletedVaultsNamed(id.subscriptionId(), id.name()).isEmpty()
+                    ? "VaultRecover" : "VaultPut";
+                response = createOrUpdateVault(req, id, body);
             }
-            default       -> Response.status(405).build();
-        };
+            case "PATCH" -> {
+                operation = "VaultPatch";
+                response = updateVault(req, id);
+            }
+            case "GET" -> {
+                operation = "VaultGet";
+                response = get(vaults, id, "vaults/" + vaultName);
+            }
+            case "DELETE" -> {
+                operation = "VaultDelete";
+                Optional<Stored<Map<String, Object>>> deleted = vaults.delete(id);
+                deleted.ifPresent(stored -> softDelete(req, stored));
+                before = deleted.map(Stored::value).orElse(null);
+                response = Response.ok().build();
+            }
+            default -> {
+                return Response.status(405).build();
+            }
+        }
+        Map<String, Object> vault = before;
+        if (vault == null && response.getStatus() / 100 == 2 && response.getEntity() instanceof Map<?, ?> document) {
+            vault = ArmJson.cast(document);
+        }
+        logs.fire(KeyVaultAudit.vaultRecord(req, operation, id.id(), vault, response, start,
+            Duration.between(start, Instant.now()).toMillis()));
+        return response;
     }
 
     private Response managedHsm(AzureRequest req, String method, ArmResourceId id, String hsmName) {
@@ -402,8 +439,7 @@ public class KeyVaultArmService implements ArmProviderService, StoreIndexSource,
      * Either way the deleted record goes: no local source says what Azure answers to a plain create over a soft-deleted
      * name, so it is not refused, and a {@code createMode: recover} with nothing to recover is an ordinary create.
      */
-    private Response createOrUpdateVault(AzureRequest req, ArmResourceId id) {
-        Map<String, Object> request = ArmJson.parseBodyLenient(req);
+    private Response createOrUpdateVault(AzureRequest req, ArmResourceId id, Map<String, Object> request) {
         List<Stored<Map<String, Object>>> deleted = deletedVaultsNamed(id.subscriptionId(), id.name());
         Map<String, Object> body = isRecover(request) && !deleted.isEmpty()
             ? recovering(ArmJson.cast(deleted.getFirst().value().get(ORIGINAL_VAULT)), request)
