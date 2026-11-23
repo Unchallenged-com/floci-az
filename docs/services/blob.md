@@ -191,13 +191,24 @@ Requests signed with an account key are checked against the current keys:
 |---|---|---|
 | Blob service SAS, Blob account SAS | Verified | Verified |
 | Shared Key and Shared Key Lite (Blob, Queue, Table) | Accepted; the key that signed is recorded | Verified; the request date must also be at most 15 minutes old |
-| Queue and Table account SAS | Accepted; the key that signed is recorded | Verified |
+| Queue and Table account SAS | Accepted; the key that signed is recorded | Verified, then the service (`ss`), resource type (`srt`) and permission of the operation |
+| Queue and Table service SAS | Accepted | Verified over the service's string to sign (version 2015-04-05 and later), then the permission of the operation |
+| `sip` and `spr`, on any SAS | Not checked | The caller's IPv4 address must be in `sip`, and `spr=https` refuses a request over HTTP |
 
 A request that fails is answered `403 AuthenticationFailed`, with the request id and time in the
 message, and (Blob and Queue) an `AuthenticationErrorDetail` that names the string the emulator signed.
 The account is the one the URL addresses: a header that names another account fails. For path-style
 URLs the account name appears twice in the canonicalized resource (`/devstoreaccount1/devstoreaccount1/...`),
-as for the Azure storage emulators. Queue and Table service SAS are not verified.
+as for the Azure storage emulators.
+
+With the switch, a Queue or Table SAS must grant the operation, as the account SAS and service SAS
+operation tables say: a service SAS can't create, delete or list queues and tables, clear a queue or write its
+metadata, and no SAS reads or writes an access policy (`403 AuthorizationFailure`). An upsert needs `a` and
+`u`. A table service SAS covers the table its `tn` names. Refusals are Azure's SAS error codes
+(`AuthorizationPermissionMismatch`, `AuthorizationServiceMismatch`, `AuthorizationResourceTypeMismatch`,
+`AuthorizationSourceIPMismatch`, `AuthorizationProtocolMismatch`), with the request id and time in the message.
+Not checked: a stored access policy (`si`, refused), a table SAS's partition and row key range, and the
+operations inside a `$batch` (it needs any of `r`, `a`, `u` or `d`).
 
 ## Intentional deviations
 

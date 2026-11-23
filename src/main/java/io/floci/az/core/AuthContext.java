@@ -1,5 +1,6 @@
 package io.floci.az.core;
 
+import io.floci.az.core.auth.StorageAuthFailure;
 import io.floci.az.core.auth.StorageSasToken;
 
 import java.util.Optional;
@@ -9,7 +10,7 @@ import java.util.Optional;
  *
  * @param signingKey    for a Shared Key, Shared Key Lite or account SAS request, the account key ({@code key1} or
  *                      {@code key2}) whose signature it carries; empty when no current key signed it
- * @param failureDetail when {@code isValid} is false, Azure's {@code AuthenticationErrorDetail} for the refusal
+ * @param failure       when {@code isValid} is false, the refusal the storage services answer, when one was decided
  */
 public record AuthContext(
     String accountName,
@@ -17,7 +18,7 @@ public record AuthContext(
     boolean isValid,
     Optional<StorageSasToken> storageSas,
     Optional<String> signingKey,
-    Optional<String> failureDetail
+    Optional<StorageAuthFailure> failure
 ) {
     public AuthContext(String accountName, AuthType type, boolean isValid) {
         this(accountName, type, isValid, Optional.empty());

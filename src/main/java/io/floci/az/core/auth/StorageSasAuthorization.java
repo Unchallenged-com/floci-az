@@ -109,7 +109,7 @@ public class StorageSasAuthorization {
         }
         Optional<String> mismatch = signatureMismatch(request, container, path, token);
         if (mismatch.isPresent()) {
-            return Optional.of(AuthenticationFailed.xml(mismatch));
+            return Optional.of(StorageAuthFailure.authenticationFailed(mismatch).xml());
         }
         if (!resourceCoversPath(request, token, path)) {
             return Optional.of(authorizationPermissionMismatch());
@@ -158,7 +158,7 @@ public class StorageSasAuthorization {
         }
         String stringToSign = token.accountStringToSign(request.accountName());
         if (keys.signer(request.accountName(), stringToSign, token.signature()).isEmpty()) {
-            return Optional.of(AuthenticationFailed.xml(Optional.of(signatureMismatch(stringToSign))));
+            return Optional.of(StorageAuthFailure.authenticationFailed(Optional.of(signatureMismatch(stringToSign))).xml());
         }
         if (token.services().indexOf('b') < 0) {
             return Optional.of(mismatch("AuthorizationServiceMismatch", "service"));
@@ -398,7 +398,7 @@ public class StorageSasAuthorization {
     }
 
     private static Response authenticationFailed() {
-        return AuthenticationFailed.xml(Optional.empty());
+        return StorageAuthFailure.authenticationFailed(Optional.empty()).xml();
     }
 
     /** One of the SAS error codes: "This request is not authorized to perform this operation using this ...". */

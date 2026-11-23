@@ -11,7 +11,9 @@ import io.floci.az.core.SignedIdentifiers;
 import io.floci.az.core.StoredObject;
 import io.floci.az.core.XmlBuilder;
 import io.floci.az.core.XmlUtils;
-import io.floci.az.core.auth.AuthenticationFailed;
+import io.floci.az.core.auth.QueueTableSasAuthorization;
+import io.floci.az.core.auth.SasGrant;
+import io.floci.az.core.auth.StorageAuthFailure;
 import io.floci.az.core.storage.StorageBackend;
 import io.floci.az.core.storage.StorageFactory;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -80,9 +82,13 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
     // does not grow with the queues that come and go; two queues that share a lock only wait for each other.
     private final Object[] messageLocks = new Object[MESSAGE_LOCK_COUNT];
 
+    private final QueueTableSasAuthorization sasAuthorization;
+
     @Inject
-    public QueueServiceHandler(StorageFactory storageFactory, EmulatorConfig config) {
+    public QueueServiceHandler(StorageFactory storageFactory, EmulatorConfig config,
+                               QueueTableSasAuthorization sasAuthorization) {
         this.config = config;
+        this.sasAuthorization = sasAuthorization;
         this.store = storageFactory.create("queue");
         Arrays.setAll(messageLocks, i -> new Object());
     }
@@ -108,6 +114,45 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
 
     }
 
+    /** The queue a request addresses; null for the service. */
+    private static String queueName(String path) {
+        return path.isEmpty() || path.equals("/") ? null : path.split("/")[0];
+    }
+
+    /**
+     * What the operation needs from a SAS, from Create an account SAS's Queue service table and Create a service
+     * SAS's queue permissions: a service SAS can't create, delete or list queues, clear them, or write their
+     * metadata, and no SAS reads or writes a queue's access policy.
+     */
+    static SasGrant sasGrant(String method, String path, Map<String, String> query) {
+        String verb = method.toUpperCase(Locale.ROOT);
+        String comp = query.get("comp");
+        if (path.isEmpty() || path.equals("/")) {
+            if ("list".equals(comp)) {
+                return SasGrant.of('s', "l", "");
+            }
+            return SasGrant.of('s', "GET".equals(verb) || "HEAD".equals(verb) ? "r" : "w", "");
+        }
+        String[] parts = path.split("/");
+        if (parts.length == 1) {
+            if ("acl".equals(comp)) {
+                return SasGrant.none('c');
+            }
+            return switch (verb) {
+                case "PUT" -> "metadata".equals(comp) ? SasGrant.of('c', "w", "") : SasGrant.of('c', "c|w", "");
+                case "DELETE" -> SasGrant.of('c', "d", "");
+                default -> SasGrant.of('c', "r", "r");
+            };
+        }
+        return switch (verb) {
+            case "POST" -> SasGrant.of('o', "a", "a");
+            case "GET" -> "true".equals(query.get("peekonly")) ? SasGrant.of('o', "r", "r") : SasGrant.of('o', "p", "p");
+            case "PUT" -> SasGrant.of('o', "u", "u");
+            case "DELETE" -> parts.length > 2 ? SasGrant.of('o', "p", "p") : SasGrant.of('o', "d", "");
+            default -> SasGrant.none('o');
+        };
+    }
+
     @Override
     public Response handle(AzureRequest request) {
         String path = request.resourcePath();
@@ -117,8 +162,12 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
         LOGGER.infof("QueueService handling: %s %s", method, path);
 
         Response response;
-        if (request.authContext() != null && !request.authContext().isValid()) {
-            response = AuthenticationFailed.xml(request.authContext().failureDetail());
+        Optional<StorageAuthFailure> refusal = request.authContext() != null && !request.authContext().isValid()
+                ? Optional.of(request.authContext().failure()
+                        .orElseGet(() -> StorageAuthFailure.authenticationFailed(Optional.empty())))
+                : sasAuthorization.authorize(request, queueName(path), sasGrant(method, path, query));
+        if (refusal.isPresent()) {
+            response = refusal.get().xml();
         } else if (path.isEmpty() || path.equals("/")) {
             if ("GET".equalsIgnoreCase(method) && "list".equals(query.get("comp"))) {
                 response = listQueues(request);

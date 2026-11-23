@@ -73,15 +73,17 @@ public class SharedKeyAuthVerifier implements AuthVerifier {
                 .map(candidate -> keys.signer(request.accountName(), candidate, credential.get().signature()))
                 .flatMap(Optional::stream)
                 .findFirst();
-        Optional<String> failure = Optional.empty();
+        Optional<String> detail = Optional.empty();
         if (config.strictStorageKeys()) {
-            failure = dateFailure(request);
-            if (failure.isEmpty() && signer.isEmpty()) {
-                failure = Optional.of("The MAC signature found in the HTTP request '" + credential.get().signature()
+            detail = dateFailure(request);
+            if (detail.isEmpty() && signer.isEmpty()) {
+                detail = Optional.of("The MAC signature found in the HTTP request '" + credential.get().signature()
                         + "' is not the same as any computed signature. Server used following string to sign: '"
                         + candidates.getFirst() + "'.");
             }
         }
+        Optional<StorageAuthFailure> failure =
+                detail.map(text -> StorageAuthFailure.authenticationFailed(Optional.of(text)));
         return Optional.of(new AuthContext(account, AuthType.SHARED_KEY, failure.isEmpty(), Optional.empty(),
                 failure.isEmpty() ? signer : Optional.empty(), failure));
     }

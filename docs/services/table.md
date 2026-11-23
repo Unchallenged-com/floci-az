@@ -88,5 +88,5 @@ floci-az:
 - **The `$filter` grammar is a practical subset**: equality, numeric comparison, and basic
   boolean composition are supported; full OData functions (`substringof`, `startswith`, datetime
   arithmetic) are not.
-- **No SAS permission enforcement**: a SAS's permissions are not checked, and a service SAS's
-  signature is not verified.
+- **SAS permissions are enforced only with `parity-overrides.strict-storage-keys`**, as are service
+  SAS signatures, `sip` and `spr`; see [Account keys](blob.md#account-keys).

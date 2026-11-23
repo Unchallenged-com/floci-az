@@ -37,7 +37,12 @@ public record StorageSasToken(
         String signedRequestHeaders,
         String signedRequestQueryParameters,
         String services,
-        String resourceTypes
+        String resourceTypes,
+        String tableName,
+        String startPartitionKey,
+        String startRowKey,
+        String endPartitionKey,
+        String endRowKey
 ) {
 
     public static Optional<StorageSasToken> from(Map<String, String> query) {
@@ -78,7 +83,12 @@ public record StorageSasToken(
                 blankToNull(query.get("srh")),
                 blankToNull(query.get("srq")),
                 blankToNull(query.get("ss")),
-                blankToNull(query.get("srt"))
+                blankToNull(query.get("srt")),
+                blankToNull(query.get("tn")),
+                blankToNull(query.get("spk")),
+                blankToNull(query.get("srk")),
+                blankToNull(query.get("epk")),
+                blankToNull(query.get("erk"))
         ));
     }
 

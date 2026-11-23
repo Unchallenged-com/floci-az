@@ -11,7 +11,7 @@ import io.floci.az.core.StoredObject;
 import io.floci.az.core.SyntheticHttpHeaders;
 import io.floci.az.core.XmlBuilder;
 import io.floci.az.core.XmlUtils;
-import io.floci.az.core.auth.AuthenticationFailed;
+import io.floci.az.core.auth.StorageAuthFailure;
 import io.floci.az.core.auth.StorageSasAuthorization;
 import io.floci.az.core.auth.StorageSasToken;
 import io.floci.az.core.storage.StorageBackend;
@@ -157,7 +157,8 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
 
         Response response;
         if (request.authContext() != null && !request.authContext().isValid()) {
-            response = AuthenticationFailed.xml(request.authContext().failureDetail());
+            response = request.authContext().failure()
+                    .orElseGet(() -> StorageAuthFailure.authenticationFailed(Optional.empty())).xml();
         } else if (path.isEmpty() || path.equals("/")) {
             if ("GET".equalsIgnoreCase(method) && "list".equals(query.get("comp"))) {
                 response = listContainers(request);

@@ -12,7 +12,9 @@ import io.floci.az.core.ServiceRoutes;
 import io.floci.az.core.SignedIdentifiers;
 import io.floci.az.core.StoredObject;
 import io.floci.az.core.XmlBuilder;
-import io.floci.az.core.auth.AuthenticationFailed;
+import io.floci.az.core.auth.QueueTableSasAuthorization;
+import io.floci.az.core.auth.SasGrant;
+import io.floci.az.core.auth.StorageAuthFailure;
 import io.floci.az.core.storage.StorageBackend;
 import io.floci.az.core.storage.StorageFactory;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -65,9 +67,13 @@ public class TableServiceHandler implements AzureServiceHandler, Resettable {
     private final Object writeLock = new Object();
 
 
+    private final QueueTableSasAuthorization sasAuthorization;
+
     @Inject
-    public TableServiceHandler(StorageFactory storageFactory, EmulatorConfig config) {
+    public TableServiceHandler(StorageFactory storageFactory, EmulatorConfig config,
+                               QueueTableSasAuthorization sasAuthorization) {
         this.config = config;
+        this.sasAuthorization = sasAuthorization;
         this.store = storageFactory.create("table");
         TableEntityKeys.migrateLegacyKeys(store, NS_PREFIX, objectMapper);
         TableEntityKeys.migrateTableNameCase(store, NS_PREFIX);
@@ -102,8 +108,14 @@ public class TableServiceHandler implements AzureServiceHandler, Resettable {
 
         LOGGER.infof("TableService handling: %s %s", method, path);
 
-        if (request.authContext() != null && !request.authContext().isValid()) {
-            return Response.fromResponse(AuthenticationFailed.odata())
+        Optional<StorageAuthFailure> refusal = request.authContext() != null && !request.authContext().isValid()
+                ? Optional.of(request.authContext().failure()
+                        .orElseGet(() -> StorageAuthFailure.authenticationFailed(Optional.empty())))
+                : sasAuthorization.authorize(request, sasTable(path), sasGrant(request.method(),
+                        request.headers().getHeaderString(X_HTTP_METHOD), request.headers().getHeaderString("If-Match"),
+                        path, query));
+        if (refusal.isPresent()) {
+            return Response.fromResponse(refusal.get().odata())
                     .header("x-ms-version", request.headers().getHeaderString("x-ms-version"))
                     .header("DataServiceVersion", "3.0;")
                     .build();
@@ -167,6 +179,48 @@ public class TableServiceHandler implements AzureServiceHandler, Resettable {
                 .header("x-ms-version", request.headers().getHeaderString("x-ms-version"))
                 .header("DataServiceVersion", "3.0;")
                 .build();
+    }
+
+    /** The table an entity request addresses; null for the service, the Tables collection and {@code $batch}. */
+    private static String sasTable(String path) {
+        if (path.isEmpty() || path.equals("/") || path.startsWith("Tables") || path.startsWith("$batch")) {
+            return null;
+        }
+        return path.contains("(") ? path.substring(0, path.indexOf('(')) : path;
+    }
+
+    /**
+     * What the operation needs from a SAS, from Create an account SAS's Table service table and Create a service
+     * SAS's table permissions: a service SAS can't create, delete or list tables, no SAS reads or writes a table's
+     * access policy, and an upsert (a write without {@code If-Match}) needs "Add (a) and Update (u)". A
+     * {@code $batch} is checked as a whole here, not by the operations it carries.
+     */
+    static SasGrant sasGrant(String method, String xHttpMethod, String ifMatch, String path,
+                             Map<String, String> query) {
+        String verb = effectiveMethod(method, xHttpMethod).toUpperCase(Locale.ROOT);
+        if (path.isEmpty() || path.equals("/")) {
+            return SasGrant.of('s', "GET".equals(verb) || "HEAD".equals(verb) ? "r" : "w", "");
+        }
+        if (path.startsWith("Tables")) {
+            return switch (verb) {
+                case "POST" -> SasGrant.of('c', "c|w", "");
+                case "DELETE" -> SasGrant.of('c', "d", "");
+                default -> SasGrant.of('c', "l", "");
+            };
+        }
+        if (path.startsWith("$batch")) {
+            return SasGrant.of('o', "r|a|u|d", "r|a|u|d");
+        }
+        if ("acl".equals(query.get("comp")) && !path.contains("(")) {
+            return SasGrant.none('c');
+        }
+        boolean keyed = path.contains("(");
+        return switch (verb) {
+            case "GET" -> SasGrant.of('o', "r", "r");
+            case "DELETE" -> SasGrant.of('o', "d", "d");
+            case "POST" -> keyed ? SasGrant.of('o', "u", "u") : SasGrant.of('o', "a", "a");
+            default -> ifMatch == null ? SasGrant.of('o', "au", "au") : SasGrant.of('o', "u", "u");
+        };
     }
 
     private static boolean isEntityMethod(String method) {
