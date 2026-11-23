@@ -113,7 +113,7 @@ public class TableServiceHandler implements AzureServiceHandler, Resettable {
                         .orElseGet(() -> StorageAuthFailure.authenticationFailed(Optional.empty())))
                 : sasAuthorization.authorize(request, sasTable(path), sasGrant(request.method(),
                         request.headers().getHeaderString(X_HTTP_METHOD), request.headers().getHeaderString("If-Match"),
-                        path, query));
+                        path, query), table -> tablePolicies(request.accountName(), table));
         if (refusal.isPresent()) {
             return Response.fromResponse(refusal.get().odata())
                     .header("x-ms-version", request.headers().getHeaderString("x-ms-version"))
@@ -390,6 +390,13 @@ public class TableServiceHandler implements AzureServiceHandler, Resettable {
         }
         return new AzureErrorResponse("NotImplemented", "The requested operation is not implemented.")
                 .toXmlResponse(501);
+    }
+
+    /** The table's stored access policies, which Set Table ACL replaces; none when there is no such table. */
+    private List<SignedIdentifiers.SignedIdentifier> tablePolicies(String accountName, String tableName) {
+        return store.get(nsKey(accountName, tableName))
+                .map(table -> SignedIdentifiers.fromStored(table.data()))
+                .orElse(List.of());
     }
 
     private Response getTableAcl(AzureRequest request, String tableName) {

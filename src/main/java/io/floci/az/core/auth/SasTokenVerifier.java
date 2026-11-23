@@ -8,7 +8,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.util.Optional;
 
 /**
@@ -17,7 +16,8 @@ import java.util.Optional;
  * no current key signed is refused. With the switch, any SAS to a storage service must also allow the caller's
  * address ({@code sip}) and protocol ({@code spr}). The Blob service checks every SAS it serves, signature included,
  * in {@link StorageSasAuthorization}; the Queue and Table services check a service SAS's signature and every SAS's
- * permissions in {@link QueueTableSasAuthorization}.
+ * permissions in {@link QueueTableSasAuthorization}. A service SAS that names a stored access policy leaves its
+ * window to the policy, and is checked again once the policy has completed it ({@link StoredAccessPolicies}).
  */
 @ApplicationScoped
 public class SasTokenVerifier implements AuthVerifier {
@@ -35,18 +35,7 @@ public class SasTokenVerifier implements AuthVerifier {
     public Optional<AuthContext> verify(AzureRequest request) {
         return StorageSasToken.from(request.queryParams())
             .map(sas -> {
-                Instant now = Instant.now();
-                boolean valid = true;
-                if (sas.startTime() != null) {
-                    valid = sas.parsedStartTime().map(OffsetDateTime::toInstant)
-                            .filter(start -> !start.isAfter(now))
-                            .isPresent();
-                }
-                if (sas.expiryTime() != null) {
-                    valid = valid && sas.parsedExpiryTime().map(OffsetDateTime::toInstant)
-                            .filter(expiry -> expiry.isAfter(now))
-                            .isPresent();
-                }
+                boolean valid = sas.isValidAt(Instant.now());
                 boolean storage = SharedKeyAuthVerifier.STORAGE_SERVICES.contains(request.serviceType())
                         && request.accountName() != null;
                 Optional<String> signer = Optional.empty();

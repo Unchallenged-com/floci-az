@@ -4,11 +4,14 @@ import io.floci.az.config.EmulatorConfig;
 import io.floci.az.core.AuthContext;
 import io.floci.az.core.AuthType;
 import io.floci.az.core.AzureRequest;
+import io.floci.az.core.SignedIdentifiers.SignedIdentifier;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * The Queue and Table services' SAS checks, with {@code parity-overrides.strict-storage-keys}; without it, as before,
@@ -20,7 +23,8 @@ import java.util.Optional;
  *       the operation, in that order.</li>
  *   <li>A service SAS must be signed by one of the account's keys over the service's string to sign (Create a
  *       service SAS, version 2015-04-05 and later), name the table the request addresses ({@code tn}), address an
- *       operation a service SAS can grant, and hold its permission.</li>
+ *       operation a service SAS can grant, and hold its permission. A service SAS that names a stored access
+ *       policy ({@code si}) takes the fields it leaves out from the policy of its queue or table.</li>
  * </ul>
  */
 @ApplicationScoped
@@ -42,8 +46,10 @@ public class QueueTableSasAuthorization {
      * The refusal of the request's SAS for an operation that needs {@code grant}, if any.
      *
      * @param resource the queue or table the request addresses; null for a service-level operation
+     * @param policies   the stored access policies of a queue or table, by name, read when a service SAS names one
      */
-    public Optional<StorageAuthFailure> authorize(AzureRequest request, String resource, SasGrant grant) {
+    public Optional<StorageAuthFailure> authorize(AzureRequest request, String resource, SasGrant grant,
+                                                  Function<String, List<SignedIdentifier>> policies) {
         AuthContext context = request.authContext();
         if (!config.strictStorageKeys() || context == null || context.type() != AuthType.SAS
                 || context.storageSas().isEmpty()) {
@@ -61,10 +67,10 @@ public class QueueTableSasAuthorization {
             return SasGrant.grants(grant.accountPermissions(), token.permissions()) ? Optional.empty()
                     : Optional.of(StorageAuthFailure.permissionMismatch());
         }
-        // Stored access policies need their own lookup, as on the Blob service; user delegation is Blob-only.
-        if (token.isUserDelegation() || token.identifier() != null || token.permissions() == null
-                || token.expiryTime() == null || token.version().compareTo(FIRST_VERSION) < 0
-                || (table && token.tableName() == null)) {
+        // User delegation is Blob-only. A SAS that names a stored access policy may leave sp and se to it.
+        if (token.isUserDelegation()
+                || (token.identifier() == null && (token.permissions() == null || token.expiryTime() == null))
+                || token.version().compareTo(FIRST_VERSION) < 0 || (table && token.tableName() == null)) {
             return Optional.of(StorageAuthFailure.authenticationFailed(Optional.empty()));
         }
         String name = table ? token.tableName() : resource;
@@ -78,11 +84,16 @@ public class QueueTableSasAuthorization {
             return Optional.of(StorageAuthFailure.authenticationFailed(
                     Optional.of(StorageSasAuthorization.signatureMismatch(stringToSign))));
         }
+        StoredAccessPolicies.Grant completed = StoredAccessPolicies.complete(token,
+                token.identifier() == null ? List.of() : policies.apply(name));
+        if (completed.refusal().isPresent()) {
+            return completed.refusal();
+        }
         // A table's $batch names no table in its path: the operations it carries are the table's.
         if (grant.servicePermissions().isEmpty() || (resource != null && !resource.equalsIgnoreCase(name))) {
             return Optional.of(StorageAuthFailure.authorizationFailure());
         }
-        return SasGrant.grants(grant.servicePermissions(), token.permissions()) ? Optional.empty()
+        return SasGrant.grants(grant.servicePermissions(), completed.token().permissions()) ? Optional.empty()
                 : Optional.of(StorageAuthFailure.permissionMismatch());
     }
 

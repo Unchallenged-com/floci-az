@@ -28,8 +28,9 @@ authentication.
   `POST` with `X-HTTP-Method: MERGE` whenever the endpoint host is `localhost`
 - **Table ACL**: Get and Set Table ACL (`{table}?comp=acl`) store up to five stored access policies
   as `SignedIdentifiers` XML on the table; a sixth policy, or a permission outside `raud`, is
-  rejected with `400 InvalidXmlDocument`. The policies are stored and returned but not enforced
-  (see SAS below)
+  rejected with `400 InvalidXmlDocument`. With `parity-overrides.strict-storage-keys`,
+  a service SAS that names one (`si`) takes its fields from it and is revoked with it; see
+  [Stored access policies](blob.md#stored-access-policies)
 - **Service properties**: `restype=service&comp=properties` returns a static
   `<StorageServiceProperties>` document (logging and metrics disabled); Set is accepted as a no-op
 

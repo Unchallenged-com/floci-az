@@ -7,6 +7,7 @@ import io.floci.az.core.AzureRequest;
 import io.floci.az.core.AzureServiceHandler;
 import io.floci.az.core.Resettable;
 import io.floci.az.core.ServiceRoutes;
+import io.floci.az.core.SignedIdentifiers;
 import io.floci.az.core.StoredObject;
 import io.floci.az.core.SyntheticHttpHeaders;
 import io.floci.az.core.XmlBuilder;
@@ -23,6 +24,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import javax.xml.stream.XMLStreamException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLDecoder;
@@ -52,6 +54,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -69,6 +72,10 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
     private static final String SNAPSHOT_PREFIX = "__snapshot__:";
     private static final String USER_METADATA_PREFIX = "UserMeta:";
     private static final String CREATION_TIME_KEY = "CreationTime";
+    /** The container's public access level, from Set Container ACL's {@code x-ms-blob-public-access}. */
+    private static final String PUBLIC_ACCESS_KEY = "BlobPublicAccess";
+    /** The permissions a container's stored access policy may hold: those of a container, directory or blob SAS. */
+    private static final String CONTAINER_SAS_PERMISSIONS = "racwdxyltfmeopi";
     private static final String CUSTOMER_PROVIDED_KEY_SHA256 = "CustomerProvidedKeySha256";
     private static final String DATALAKE_APPEND_PREFIX = "__abfs_append__:";
     private static final String DATALAKE_OWNER = DataLakePathOperations.DEFAULT_OWNER;
@@ -256,9 +263,11 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
                     response = listBlobs(request, containerName);
                 } else if ("GET".equalsIgnoreCase(method) && "blobs".equals(comp)) {
                     response = findBlobsByTags(request, containerName);
+                } else if ("acl".equals(comp) && "container".equals(query.get("restype"))) {
+                    response = containerAcl(request, containerName);
                 } else if (comp != null) {
                     // Container ops are multiplexed onto the same URL by `comp` (metadata, acl,
-                    // lease, ...). None are implemented. This branch must stay ABOVE the
+                    // lease, ...). The others are not implemented. This branch must stay ABOVE the
                     // restype=container ones: they ignore `comp`, so SetContainerMetadata would
                     // otherwise land in createContainer and answer 409.
                     response = notImplemented();
@@ -510,6 +519,95 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
             .end("StorageServiceProperties")
             .build();
         return Response.ok(xml, "application/xml").build();
+    }
+
+    /**
+     * Get and Set Container ACL: the container's stored access policies and its public access level. "Other
+     * authorization errors (for example, attempting to modify an access control list)" are AuthorizationFailure,
+     * and no SAS grants either operation.
+     */
+    private Response containerAcl(AzureRequest request, String containerName) {
+        if (storageSas(request).isPresent()) {
+            return StorageAuthFailure.authorizationFailure().xml();
+        }
+        if ("GET".equalsIgnoreCase(request.method()) || "HEAD".equalsIgnoreCase(request.method())) {
+            return getContainerAcl(request, containerName, "HEAD".equalsIgnoreCase(request.method()));
+        }
+        if ("PUT".equalsIgnoreCase(request.method())) {
+            return setContainerAcl(request, containerName);
+        }
+        return notImplemented();
+    }
+
+    private Response getContainerAcl(AzureRequest request, String containerName, boolean headOnly) {
+        String key = nsKey(request.accountName(), containerName);
+        Optional<StoredObject> container = readContainer(key);
+        if (container.isEmpty()) {
+            return containerNotFound();
+        }
+        byte[] acl = container.get().data();
+        Response.ResponseBuilder response = headOnly ? Response.ok() : Response.ok(
+                acl.length == 0 ? SignedIdentifiers.emptyXml() : new String(acl, StandardCharsets.UTF_8),
+                MediaType.APPLICATION_XML);
+        String publicAccess = container.get().metadata().get(PUBLIC_ACCESS_KEY);
+        if (publicAccess != null) {
+            response.header("x-ms-blob-public-access", publicAccess);
+        }
+        return response
+                .header("Last-Modified", RFC1123_DATE_TIME.format(effectiveLastModified(container.get())))
+                .header("ETag", effectiveEtag(container.get(), key))
+                .build();
+    }
+
+    /**
+     * Set Container ACL replaces the container's policies, "at most five", and its public access level: "If this
+     * header isn't included in the request, container data is private to the account owner." It changes the
+     * container's ETag and Last-Modified.
+     */
+    private Response setContainerAcl(AzureRequest request, String containerName) {
+        String publicAccess = request.headers().getHeaderString("x-ms-blob-public-access");
+        if (publicAccess != null && !"container".equals(publicAccess) && !"blob".equals(publicAccess)) {
+            return invalidHeaderValue();
+        }
+        List<SignedIdentifiers.SignedIdentifier> identifiers;
+        try {
+            identifiers = SignedIdentifiers.parse(
+                    new String(request.bodyStream().readAllBytes(), StandardCharsets.UTF_8));
+        } catch (IOException | XMLStreamException e) {
+            LOGGER.debugv("Rejecting container ACL body for {0}: {1}", containerName, e.getMessage());
+            return SignedIdentifiers.invalidXmlDocument().toXmlResponse(Response.Status.BAD_REQUEST.getStatusCode());
+        }
+        if (!SignedIdentifiers.isValid(identifiers, CONTAINER_SAS_PERMISSIONS)) {
+            return SignedIdentifiers.invalidXmlDocument().toXmlResponse(Response.Status.BAD_REQUEST.getStatusCode());
+        }
+        String key = nsKey(request.accountName(), containerName);
+        return leaseService.exclusively(() -> {
+            Optional<StoredObject> current = readContainer(key);
+            if (current.isEmpty()) {
+                return containerNotFound();
+            }
+            Map<String, String> metadata = new HashMap<>(current.get().metadata());
+            if (publicAccess == null) {
+                metadata.remove(PUBLIC_ACCESS_KEY);
+            } else {
+                metadata.put(PUBLIC_ACCESS_KEY, publicAccess);
+            }
+            byte[] acl = identifiers.isEmpty()
+                    ? new byte[0]
+                    : SignedIdentifiers.toXml(identifiers).getBytes(StandardCharsets.UTF_8);
+            Instant now = Instant.now();
+            String etag = etags.next();
+            store.put(key, new StoredObject(current.get().key(), acl, metadata, now, etag));
+            return Response.ok()
+                    .header("Last-Modified", RFC1123_DATE_TIME.format(now))
+                    .header("ETag", etag)
+                    .build();
+        });
+    }
+
+    private static Response containerNotFound() {
+        return new AzureErrorResponse("ContainerNotFound", "The specified container does not exist.")
+                .toXmlResponse(Response.Status.NOT_FOUND.getStatusCode());
     }
 
     private Response getContainer(AzureRequest request, String containerName, boolean headOnly) {
@@ -1087,7 +1185,8 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
         AzureRequest sourceRead = new AzureRequest("GET", source.account(), request.serviceType(), path,
                 new SyntheticHttpHeaders(Map.of()), InputStream.nullInputStream(), query, source.query(), null,
                 request.secure(), request.host(), request.remoteAddress(), path, null, request.authority());
-        return sasAuthorization.authorizeRead(sourceRead, source.container(), source.blob(), token.get())
+        return sasAuthorization.authorizeRead(sourceRead, source.container(), source.blob(), token.get(),
+                        containerPolicies(sourceRead, source.container()))
                 .map(denied -> new AzureErrorResponse("CannotVerifyCopySource",
                         "Server failed to authenticate the request. Make sure the value of Authorization header is "
                                 + "formed correctly including the signature.")
@@ -3953,59 +4052,80 @@ public class BlobServiceHandler implements AzureServiceHandler, Resettable {
     private Response authorizeRead(AzureRequest request, String containerName, String blobName) {
         return storageSas(request)
                 .flatMap(token -> sasAuthorization.authorizeRead(
-                        request, containerName, blobName, token))
+                        request, containerName, blobName, token, containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeList(AzureRequest request, String containerName) {
         return storageSas(request)
-                .flatMap(token -> sasAuthorization.authorizeList(request, containerName, token))
+                .flatMap(token -> sasAuthorization.authorizeList(request, containerName, token,
+                        containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeList(AzureRequest request, String containerName, String path) {
         return storageSas(request)
-                .flatMap(token -> sasAuthorization.authorizeList(request, containerName, path, token))
+                .flatMap(token -> sasAuthorization.authorizeList(request, containerName, path, token,
+                        containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeTags(AzureRequest request, String containerName, String blobName) {
         return storageSas(request)
-                .flatMap(token -> sasAuthorization.authorizeTags(request, containerName, blobName, token))
+                .flatMap(token -> sasAuthorization.authorizeTags(request, containerName, blobName, token,
+                        containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeFilter(AzureRequest request, String containerName) {
         return storageSas(request)
-                .flatMap(token -> sasAuthorization.authorizeFilter(request, containerName, token))
+                .flatMap(token -> sasAuthorization.authorizeFilter(request, containerName, token,
+                        containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeCreate(AzureRequest request, String containerName, String blobName) {
         return storageSas(request)
                 .flatMap(token -> sasAuthorization.authorizeCreate(
-                        request, containerName, blobName, token))
+                        request, containerName, blobName, token, containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeWrite(AzureRequest request, String containerName, String blobName) {
         return storageSas(request)
                 .flatMap(token -> sasAuthorization.authorizeWrite(
-                        request, containerName, blobName, token))
+                        request, containerName, blobName, token, containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeDelete(AzureRequest request, String containerName, String blobName) {
         return storageSas(request)
                 .flatMap(token -> sasAuthorization.authorizeDelete(
-                        request, containerName, blobName, token))
+                        request, containerName, blobName, token, containerPolicies(request, containerName)))
                 .orElse(null);
     }
 
     private Response authorizeAppend(AzureRequest request, String containerName, String blobName) {
         return storageSas(request)
-                .flatMap(token -> sasAuthorization.authorizeAppend(request, containerName, blobName, token))
+                .flatMap(token -> sasAuthorization.authorizeAppend(request, containerName, blobName, token,
+                        containerPolicies(request, containerName)))
                 .orElse(null);
+    }
+
+    /**
+     * The stored access policies of the container, read when a SAS names one: Set Container ACL replaces them, so a
+     * SAS that names a policy follows its changes at once.
+     */
+    private Supplier<List<SignedIdentifiers.SignedIdentifier>> containerPolicies(AzureRequest request,
+                                                                                 String containerName) {
+        return () -> {
+            if (containerName == null || containerName.isBlank()) {
+                return List.of();
+            }
+            return store.get(nsKey(request.accountName(), containerName))
+                    .map(container -> SignedIdentifiers.fromStored(container.data()))
+                    .orElse(List.of());
+        };
     }
 
     private static Optional<StorageSasToken> storageSas(AzureRequest request) {

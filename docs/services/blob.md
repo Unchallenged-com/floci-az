@@ -14,6 +14,13 @@ Blob XML responses, and the Data Lake Storage Gen2 DFS host alias.
 
 - **Containers**: Create, Get properties, Delete, List (`?comp=list`); duplicate create returns
   `409 ContainerAlreadyExists`
+- **Container ACL**: Get and Set Container ACL (`{container}?restype=container&comp=acl`) store up to
+  five stored access policies as `SignedIdentifiers` XML on the container, and the public access level
+  of `x-ms-blob-public-access` (`container` or `blob`; without the header the container is private).
+  A sixth policy, or a permission outside a container or blob SAS's, is rejected with
+  `400 InvalidXmlDocument`, another public access value with `400 InvalidHeaderValue`. Setting the ACL
+  changes the container's ETag and `Last-Modified`. The public access level is stored and returned, not
+  enforced: anonymous requests are served as before
 - **Blobs**: Put (upload), Get (download), Delete, List within a container; overwrite semantics
 - **Block blobs**: staged block upload (`?comp=block`) followed by commit (`?comp=blocklist`) for
   large payloads, in addition to single-request `Put Blob`
@@ -108,6 +115,7 @@ Blob XML responses, and the Data Lake Storage Gen2 DFS host alias.
 
 ```
 http://localhost:4577/{account}/{container}                  # container operations
+http://localhost:4577/{account}/{container}?restype=container&comp=acl  # container ACL
 http://localhost:4577/{account}/{container}/{blob}           # blob operations
 http://localhost:4577/{account}/{filesystem}?resource=filesystem&recursive=true  # ADLS listPaths
 ```
@@ -207,8 +215,28 @@ metadata, and no SAS reads or writes an access policy (`403 AuthorizationFailure
 `u`. A table service SAS covers the table its `tn` names. Refusals are Azure's SAS error codes
 (`AuthorizationPermissionMismatch`, `AuthorizationServiceMismatch`, `AuthorizationResourceTypeMismatch`,
 `AuthorizationSourceIPMismatch`, `AuthorizationProtocolMismatch`), with the request id and time in the message.
-Not checked: a stored access policy (`si`, refused), a table SAS's partition and row key range, and the
-operations inside a `$batch` (it needs any of `r`, `a`, `u` or `d`).
+Not checked: a table SAS's partition and row key range, and the operations inside a `$batch` (it needs any
+of `r`, `a`, `u` or `d`).
+
+### Stored access policies
+
+A service SAS that names a stored access policy (`si`) of its container, queue or table takes from it the
+start, expiry and permissions it does not carry itself, as Define a stored access policy describes: on the
+Blob service always, on the Queue and Table services with `parity-overrides.strict-storage-keys`. The policy
+is read on every request, so changing it changes every SAS that names it, and removing it, or setting its
+expiry in the past, revokes them; a policy set again under the same name brings them back. Azure may take
+up to 30 seconds to apply a change; the emulator applies it at once. Refusals are `AuthenticationFailed`, `403`
+unless noted, with an `AuthenticationErrorDetail` on Blob and Queue:
+
+- no policy of that name: `SAS identifier cannot be found for specified signed identifier`
+- the SAS and the policy both hold the start, the expiry or the permissions: `400`, as Set Container, Queue
+  and Table ACL say, with `Access policy fields can be associated with signature or SAS identifier but not both`
+- neither holds the expiry, or neither holds the permissions: `Signed expiry must be specified in signature or
+  SAS identifier`, `Signed permission must be specified in signature or SAS identifier`
+- the window the policy completes is closed: no detail, as for any expired SAS
+
+An account SAS or a user delegation SAS does not use stored access policies, and no SAS reads or writes
+an ACL (`403 AuthorizationFailure`).
 
 ## Intentional deviations
 
@@ -236,8 +264,9 @@ operations inside a `$batch` (it needs any of `r`, `a`, `u` or `d`).
   `sdd` and version 2020-02-10 or later. SDK-generated user delegation SAS tokens
   for container (`sr=c`), blob (`sr=b`), Blob snapshot (`sr=bs`), and ADLS directory (`sr=d`)
   resources are validated.
-  Account SAS, stored access policies, IP/protocol restrictions, and the full SAS feature matrix
-  are not fully modeled. User delegation keys are protected by a process-local secret, so SAS
+  A service SAS can name a stored access policy of its container
+  ([Stored access policies](#stored-access-policies)). IP/protocol restrictions are checked only with
+  `parity-overrides.strict-storage-keys`, and the full SAS feature matrix is not modeled. User delegation keys are protected by a process-local secret, so SAS
   tokens issued by a previous emulator process are invalid after restart.
 - **Copies complete at once and stay inside the emulator.** Copy Blob reports `success` in its
   `202`, so there is no pending state to poll and Abort Copy Blob is not served. A source outside

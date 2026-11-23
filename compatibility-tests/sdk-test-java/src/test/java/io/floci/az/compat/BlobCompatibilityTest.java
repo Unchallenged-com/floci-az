@@ -9,6 +9,8 @@ import com.azure.storage.blob.BlobClientBuilder;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.BlobServiceClientBuilder;
+import com.azure.storage.blob.models.BlobAccessPolicy;
+import com.azure.storage.blob.models.BlobContainerAccessPolicies;
 import com.azure.storage.blob.models.BlobCopyInfo;
 import com.azure.storage.blob.models.BlobErrorCode;
 import com.azure.storage.blob.models.BlobHttpHeaders;
@@ -17,6 +19,7 @@ import com.azure.storage.blob.models.BlobProperties;
 import com.azure.storage.blob.models.BlobRange;
 import com.azure.storage.blob.models.BlobRequestConditions;
 import com.azure.storage.blob.models.BlobServiceProperties;
+import com.azure.storage.blob.models.BlobSignedIdentifier;
 import com.azure.storage.blob.models.BlobStorageException;
 import com.azure.storage.blob.models.BlockListType;
 import com.azure.storage.blob.models.CopyStatusType;
@@ -24,6 +27,7 @@ import com.azure.storage.blob.models.CustomerProvidedKey;
 import com.azure.storage.blob.models.LeaseStateType;
 import com.azure.storage.blob.models.LeaseStatusType;
 import com.azure.storage.blob.models.ListBlobsOptions;
+import com.azure.storage.blob.models.PublicAccessType;
 import com.azure.storage.blob.models.TaggedBlobItem;
 import com.azure.storage.blob.options.BlobInputStreamOptions;
 import com.azure.storage.blob.options.BlobParallelUploadOptions;
@@ -49,6 +53,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
@@ -537,6 +543,44 @@ class BlobCompatibilityTest {
                 .sasToken(sas)
                 .buildClient();
         assertArrayEquals(content, sasBlob.downloadContent().toBytes());
+
+        client.deleteBlobContainer(name);
+    }
+
+    @Test
+    @DisplayName("stored access policy: setAccessPolicy round-trips, and a SAS naming it is revoked with it")
+    void storedAccessPolicyGovernsTheSasThatNamesIt() {
+        String name = containerName();
+        BlobContainerClient container = client.createBlobContainer(name);
+        BlobClient blob = container.getBlobClient("policy.txt");
+        byte[] content = "stored policy".getBytes(StandardCharsets.UTF_8);
+        blob.upload(new ByteArrayInputStream(content), content.length, true);
+
+        OffsetDateTime start = OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(5).truncatedTo(ChronoUnit.SECONDS);
+        OffsetDateTime expiry = start.plusHours(1);
+        container.setAccessPolicy(PublicAccessType.BLOB, List.of(new BlobSignedIdentifier().setId("reader")
+                .setAccessPolicy(new BlobAccessPolicy().setStartsOn(start).setExpiresOn(expiry)
+                        .setPermissions("r"))));
+        BlobContainerAccessPolicies policies = container.getAccessPolicy();
+        assertEquals(PublicAccessType.BLOB, policies.getBlobAccessType());
+        assertEquals(1, policies.getIdentifiers().size());
+        BlobSignedIdentifier stored = policies.getIdentifiers().get(0);
+        assertEquals("reader", stored.getId());
+        assertEquals("r", stored.getAccessPolicy().getPermissions());
+        assertEquals(start, stored.getAccessPolicy().getStartsOn());
+        assertEquals(expiry, stored.getAccessPolicy().getExpiresOn());
+
+        BlobClient sasBlob = new BlobClientBuilder()
+                .endpoint(blob.getBlobUrl())
+                .sasToken(blob.generateSas(new BlobServiceSasSignatureValues("reader")))
+                .buildClient();
+        assertArrayEquals(content, sasBlob.downloadContent().toBytes());
+
+        container.setAccessPolicy(null, List.of());
+        assertNull(container.getAccessPolicy().getBlobAccessType());
+        BlobStorageException ex = assertThrows(BlobStorageException.class, sasBlob::downloadContent);
+        assertEquals(403, ex.getStatusCode());
+        assertEquals(BlobErrorCode.AUTHENTICATION_FAILED, ex.getErrorCode());
 
         client.deleteBlobContainer(name);
     }

@@ -2,6 +2,7 @@ package io.floci.az.core.auth;
 
 import io.floci.az.core.AzureErrorResponse;
 import io.floci.az.core.AzureRequest;
+import io.floci.az.core.SignedIdentifiers.SignedIdentifier;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
@@ -20,6 +21,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 @ApplicationScoped
 public class StorageSasAuthorization {
@@ -40,42 +42,51 @@ public class StorageSasAuthorization {
         return "Signature did not match. String to sign used was " + stringToSign;
     }
 
-    public Optional<Response> authorizeRead(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.READ);
+    public Optional<Response> authorizeRead(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.READ, policies);
     }
 
-    public Optional<Response> authorizeList(AzureRequest request, String container, StorageSasToken token) {
-        return authorize(request, container, null, token, Operation.LIST);
+    public Optional<Response> authorizeList(AzureRequest request, String container, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, null, token, Operation.LIST, policies);
     }
 
-    public Optional<Response> authorizeList(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.LIST);
+    public Optional<Response> authorizeList(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.LIST, policies);
     }
 
-    public Optional<Response> authorizeCreate(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.CREATE);
+    public Optional<Response> authorizeCreate(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.CREATE, policies);
     }
 
-    public Optional<Response> authorizeWrite(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.WRITE);
+    public Optional<Response> authorizeWrite(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.WRITE, policies);
     }
 
-    public Optional<Response> authorizeDelete(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.DELETE);
+    public Optional<Response> authorizeDelete(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.DELETE, policies);
     }
 
-    public Optional<Response> authorizeAppend(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.APPEND);
+    public Optional<Response> authorizeAppend(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.APPEND, policies);
     }
 
     /** Get and Set Blob Tags: the Tags ({@code t}) permission. */
-    public Optional<Response> authorizeTags(AzureRequest request, String container, String path, StorageSasToken token) {
-        return authorize(request, container, path, token, Operation.TAGS);
+    public Optional<Response> authorizeTags(AzureRequest request, String container, String path, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, path, token, Operation.TAGS, policies);
     }
 
     /** Find Blobs by Tags: the Filter ({@code f}) permission. */
-    public Optional<Response> authorizeFilter(AzureRequest request, String container, StorageSasToken token) {
-        return authorize(request, container, null, token, Operation.FILTER);
+    public Optional<Response> authorizeFilter(AzureRequest request, String container, StorageSasToken token,
+            Supplier<List<SignedIdentifier>> policies) {
+        return authorize(request, container, null, token, Operation.FILTER, policies);
     }
 
     private Optional<Response> authorize(
@@ -83,12 +94,16 @@ public class StorageSasAuthorization {
             String container,
             String path,
             StorageSasToken token,
-            Operation operation
+            Operation operation,
+            Supplier<List<SignedIdentifier>> policies
     ) {
         if (token.isAccountSas()) {
             return authorizeAccountSas(request, container, path, token, operation);
         }
-        if (token.resource() == null || token.permissions() == null || token.expiryTime() == null) {
+        // Stored access policies are for the service SAS alone; a user delegation SAS does not sign si.
+        boolean namesPolicy = token.identifier() != null && !token.isUserDelegation();
+        if (token.resource() == null
+                || (!namesPolicy && (token.permissions() == null || token.expiryTime() == null))) {
             return Optional.of(authenticationFailed());
         }
         if (!isSupportedResource(token.resource()) || layoutFor(token.version()) == null
@@ -96,10 +111,6 @@ public class StorageSasAuthorization {
             return Optional.of(authenticationFailed());
         }
         if (token.isUserDelegation() && !delegationKeyValid(token)) {
-            return Optional.of(authenticationFailed());
-        }
-        if (!token.isUserDelegation() && token.identifier() != null) {
-            // Stored access policies need their own lookup and revocation semantics.
             return Optional.of(authenticationFailed());
         }
         if (!token.isUserDelegation() && "d".equals(token.resource())
@@ -111,10 +122,18 @@ public class StorageSasAuthorization {
         if (mismatch.isPresent()) {
             return Optional.of(StorageAuthFailure.authenticationFailed(mismatch).xml());
         }
+        StorageSasToken granted = token;
+        if (namesPolicy) {
+            StoredAccessPolicies.Grant grant = StoredAccessPolicies.complete(token, policies.get());
+            if (grant.refusal().isPresent()) {
+                return Optional.of(grant.refusal().get().xml());
+            }
+            granted = grant.token();
+        }
         if (!resourceCoversPath(request, token, path)) {
             return Optional.of(authorizationPermissionMismatch());
         }
-        if (!operation.allowedBy(token)) {
+        if (!operation.allowedBy(granted)) {
             return Optional.of(authorizationPermissionMismatch());
         }
         return Optional.empty();

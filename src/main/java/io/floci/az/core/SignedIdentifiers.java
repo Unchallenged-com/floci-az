@@ -5,12 +5,13 @@ import org.jboss.logging.Logger;
 import javax.xml.stream.XMLStreamConstants;
 import javax.xml.stream.XMLStreamException;
 import javax.xml.stream.XMLStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * The {@code SignedIdentifiers} document that the Storage ACL operations ({@code ?comp=acl} on a
- * queue or a table) exchange: up to five stored access policies, each an {@code Id} plus an optional
+ * container, a queue or a table) exchange: up to five stored access policies, each an {@code Id} plus an optional
  * {@code AccessPolicy} of {@code Start}, {@code Expiry} and {@code Permission}.
  *
  * <p>Start and Expiry are kept as the strings the client sent, so a policy reads back exactly as it was
@@ -97,6 +98,22 @@ public final class SignedIdentifiers {
             r.close();
         }
         return identifiers;
+    }
+
+    /**
+     * The policies a container, queue or table record keeps, as {@link #toXml} wrote them: none for an empty record.
+     * The record was validated when it was set, so an unreadable one is logged and holds no policy.
+     */
+    public static List<SignedIdentifier> fromStored(byte[] stored) {
+        if (stored.length == 0) {
+            return List.of();
+        }
+        try {
+            return parse(new String(stored, StandardCharsets.UTF_8));
+        } catch (XMLStreamException e) {
+            LOG.warnv("Ignoring unreadable stored access policies: {0}", e.getMessage());
+            return List.of();
+        }
     }
 
     /**

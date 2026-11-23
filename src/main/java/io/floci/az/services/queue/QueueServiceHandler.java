@@ -165,7 +165,8 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
         Optional<StorageAuthFailure> refusal = request.authContext() != null && !request.authContext().isValid()
                 ? Optional.of(request.authContext().failure()
                         .orElseGet(() -> StorageAuthFailure.authenticationFailed(Optional.empty())))
-                : sasAuthorization.authorize(request, queueName(path), sasGrant(method, path, query));
+                : sasAuthorization.authorize(request, queueName(path), sasGrant(method, path, query),
+                        queue -> queuePolicies(request.accountName(), queue));
         if (refusal.isPresent()) {
             response = refusal.get().xml();
         } else if (path.isEmpty() || path.equals("/")) {
@@ -382,6 +383,13 @@ public class QueueServiceHandler implements AzureServiceHandler, Resettable {
         }
         return new AzureErrorResponse("NotImplemented", "The requested operation is not implemented.")
                 .toXmlResponse(501);
+    }
+
+    /** The queue's stored access policies, which Set Queue ACL replaces; none when there is no such queue. */
+    private List<SignedIdentifiers.SignedIdentifier> queuePolicies(String accountName, String queueName) {
+        return store.get(nsKey(accountName, queueName))
+                .map(queue -> SignedIdentifiers.fromStored(queue.data()))
+                .orElse(List.of());
     }
 
     private Response getQueueAcl(AzureRequest request, String queueName) {

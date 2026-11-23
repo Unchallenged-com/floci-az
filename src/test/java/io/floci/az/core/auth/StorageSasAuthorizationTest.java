@@ -12,6 +12,7 @@ import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -56,6 +57,7 @@ class StorageSasAuthorizationTest {
         String signature = Base64.getEncoder().encodeToString(mac.doFinal(fields.getBytes(StandardCharsets.UTF_8)));
         Map<String, String> query = Map.of("sv", "2020-12-06", "sp", "r", "sr", "b", "se", expiry, "sig", signature);
         AzureRequest request = new AzureRequest("GET", account, "blob", "container/file", null, null, query, null, false);
-        return authorization.authorizeRead(request, "container", "file", StorageSasToken.from(query).orElseThrow());
+        return authorization.authorizeRead(request, "container", "file", StorageSasToken.from(query).orElseThrow(),
+                List::of);
     }
 }

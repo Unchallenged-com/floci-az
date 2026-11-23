@@ -1,5 +1,6 @@
 package io.floci.az.core.auth;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
@@ -90,6 +91,31 @@ public record StorageSasToken(
                 blankToNull(query.get("epk")),
                 blankToNull(query.get("erk"))
         ));
+    }
+
+    /**
+     * This SAS with the start, expiry and permissions that a stored access policy completes it with; every other
+     * field, the signature's included, stays as signed.
+     */
+    public StorageSasToken withAccessPolicy(String start, String expiry, String signedPermissions) {
+        return new StorageSasToken(version, signature, signedPermissions, resource, start, expiry, signedObjectId,
+                signedTenantId, signedKeyStart, signedKeyExpiry, signedKeyService, signedKeyVersion, protocol, ipRange,
+                identifier, preauthorizedAgentObjectId, agentObjectId, correlationId, directoryDepth, cacheControl,
+                contentDisposition, contentEncoding, contentLanguage, contentType, encryptionScope, snapshotTime,
+                delegatedUserTenantId, delegatedUserObjectId, signedRequestHeaders, signedRequestQueryParameters,
+                services, resourceTypes, tableName, startPartitionKey, startRowKey, endPartitionKey, endRowKey);
+    }
+
+    /**
+     * Whether {@code now} is inside the SAS's time window: on or after its start, when it has one, and before its
+     * expiry, when it has one. A time that does not parse closes the window.
+     */
+    public boolean isValidAt(Instant now) {
+        boolean started = startTime == null
+                || parsedStartTime().map(OffsetDateTime::toInstant).filter(start -> !start.isAfter(now)).isPresent();
+        boolean unexpired = expiryTime == null
+                || parsedExpiryTime().map(OffsetDateTime::toInstant).filter(expiry -> expiry.isAfter(now)).isPresent();
+        return started && unexpired;
     }
 
     public Optional<OffsetDateTime> parsedStartTime() {

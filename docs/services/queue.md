@@ -15,8 +15,9 @@ protocol with Shared Key authentication and XML responses.
   returns the Azure `404 QueueNotFound` shape
 - **Queue ACL**: Get and Set Queue ACL (`{queue}?comp=acl`) store up to five stored access
   policies as `SignedIdentifiers` XML on the queue, alongside its metadata; a sixth policy, or a
-  permission outside `raup`, is rejected with `400 InvalidXmlDocument`. The policies are stored and
-  returned but not enforced (see SAS below)
+  permission outside `raup`, is rejected with `400 InvalidXmlDocument`. With
+  `parity-overrides.strict-storage-keys`, a service SAS that names one (`si`) takes its fields from it
+  and is revoked with it; see [Stored access policies](blob.md#stored-access-policies)
 - **Messages**: Enqueue (send), Dequeue (receive), Delete, Peek; multiple in-flight messages
 - **Peek is non-consuming**: `?peekonly=true` returns messages without advancing the dequeue count
   or hiding them

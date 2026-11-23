@@ -231,7 +231,7 @@ public class BlobCompDispatchTest {
      * {@code containerClient.setMetadata()}.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"metadata", "acl", "lease"})
+    @ValueSource(strings = {"metadata", "lease"})
     void unimplementedContainerCompIsNotMistakenForCreateContainer(String comp) {
         given()
                 .when().put("/{account}/{container}?restype=container&comp={comp}",
@@ -241,10 +241,11 @@ public class BlobCompDispatchTest {
 
     /**
      * GetContainerAccessPolicy used to fall to getContainer and answer 200 with an empty body,
-     * which the SDK then failed to deserialise as SignedIdentifiers.
+     * which the SDK then failed to deserialise as SignedIdentifiers. No other container comp may
+     * fall there either.
      */
     @ParameterizedTest
-    @ValueSource(strings = {"acl", "metadata"})
+    @ValueSource(strings = {"metadata"})
     void unimplementedContainerCompOnGetIsNotMistakenForGetContainer(String comp) {
         given()
                 .when().get("/{account}/{container}?restype=container&comp={comp}",
