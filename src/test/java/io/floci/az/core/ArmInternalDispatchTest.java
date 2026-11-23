@@ -43,7 +43,7 @@ class ArmInternalDispatchTest {
     private static final String POLICY_API = "?api-version=2025-03-01";
 
     /** Values a handler generates on every call, so two equal requests never answer them equally. */
-    private static final Set<String> GENERATED = Set.of("etag", "lastModifiedTime", "creationTime");
+    private static final Set<String> GENERATED = Set.of("etag", "lastModifiedTime", "creationTime", "keyCreationTime");
 
     @Inject
     ArmRouter router;

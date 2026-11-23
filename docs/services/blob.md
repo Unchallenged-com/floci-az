@@ -183,6 +183,8 @@ Each storage account has two keys, as in Azure, shared by its Blob, Queue and Ta
 - ARM `listKeys` returns both, each with its `creationTime`. `regenerateKey` (`{"keyName":"key1"}` or
   `"key2"`) replaces the named key with 512 random bits, leaves the other one as it is, and answers with
   both. Deleting the account drops its keys.
+- The account's `properties.keyCreationTime` (`key1`, `key2`) is each key's `creationTime`, so it changes
+  with `regenerateKey`. An account's keys are created with it.
 - Keys are kept in the `storage-account-keys` store, which follows the global storage mode.
 
 Requests signed with an account key are checked against the current keys:

@@ -100,6 +100,29 @@ class ArmStorageAccountKeysTest {
     }
 
     @Test
+    void keyCreationTimeIsEachKeysCreationTimeAndFollowsRegenerateKey() {
+        createAccount("keytimeacct");
+        JsonPath keys = listKeys("keytimeacct");
+        JsonPath account = given().when().get(ARM + "keytimeacct" + API).then().statusCode(200).extract().jsonPath();
+        assertEquals(keys.getString("keys[0].creationTime"), account.getString("properties.keyCreationTime.key1"));
+        assertEquals(keys.getString("keys[1].creationTime"), account.getString("properties.keyCreationTime.key2"));
+
+        JsonPath regenerated = given().contentType("application/json").body("{\"keyName\":\"key2\"}")
+            .when().post(ARM + "keytimeacct/regenerateKey" + API).then().statusCode(200).extract().jsonPath();
+
+        JsonPath after = given().when().get(ARM + "keytimeacct" + API).then().statusCode(200).extract().jsonPath();
+        assertEquals(account.getString("properties.keyCreationTime.key1"),
+                after.getString("properties.keyCreationTime.key1"));
+        assertEquals(regenerated.getString("keys[1].creationTime"), after.getString("properties.keyCreationTime.key2"));
+        assertNotEquals(account.getString("properties.keyCreationTime.key2"),
+                after.getString("properties.keyCreationTime.key2"));
+        String listed = given().when().get(ARM.substring(0, ARM.length() - 1) + API).then().statusCode(200)
+                .extract().jsonPath()
+                .getString("value.find { it.name == 'keytimeacct' }.properties.keyCreationTime.key2");
+        assertEquals(after.getString("properties.keyCreationTime.key2"), listed);
+    }
+
+    @Test
     void regenerateKeyRefusesAnotherKeyName() {
         createAccount("regenbadacct");
 

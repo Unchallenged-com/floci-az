@@ -254,7 +254,7 @@ public class StorageAccountArmService
             case "PUT"    -> createOrUpdate(req, id);
             case "PATCH"  -> update(req, id);
             case "GET"    -> accounts.get(id)
-                    .map(stored -> Response.ok(stored.value()).build())
+                    .map(stored -> Response.ok(withKeyCreationTime(stored.value())).build())
                     .orElseGet(() -> armNotFound("storageAccounts/" + id.name()));
             case "DELETE" -> delete(id);
             default       -> Response.status(405).build();
@@ -401,7 +401,24 @@ public class StorageAccountArmService
         return accounts.list(scope).stream()
                 .sorted(Comparator.comparing(stored -> stored.id().canonicalKey()))
                 .map(Stored::value)
+                .map(this::withKeyCreationTime)
                 .toList();
+    }
+
+    /**
+     * The account document with {@code properties.keyCreationTime}, which "indicates when the account access keys
+     * were created or last rotated": each key's {@code creationTime}, as {@code listKeys} answers it. Read from the
+     * keys rather than stored, so a {@code regenerateKey} shows at once; an account's keys are created with it.
+     */
+    private Map<String, Object> withKeyCreationTime(Map<String, Object> document) {
+        Map<String, Object> keyCreationTime = new LinkedHashMap<>();
+        keys.keys(String.valueOf(document.get("name")))
+                .forEach(key -> keyCreationTime.put(key.keyName(), key.creationTime().toString()));
+        Map<String, Object> properties = new LinkedHashMap<>(ArmJson.cast(document.get("properties")));
+        properties.put("keyCreationTime", keyCreationTime);
+        Map<String, Object> presented = new LinkedHashMap<>(document);
+        presented.put("properties", properties);
+        return presented;
     }
 
     /**
@@ -432,7 +449,7 @@ public class StorageAccountArmService
                 ignored -> document(accountId, account, body, hnsEnabled, defaults.defaultLocation(req.scope()))).stored().value();
         blobHandler.setHierarchicalNamespaceEnabled(account, hnsEnabled);
         LOG.infov("ARM: created storage account {0}", account);
-        return Response.ok(written).build();
+        return Response.ok(withKeyCreationTime(written)).build();
     }
 
     private static Map<String, Object> document(String id, String account, Map<String, Object> body,
@@ -510,7 +527,7 @@ public class StorageAccountArmService
                 ? accounts.get(id)
                 : accounts.update(id, resource -> withTags(resource, tags));
         return updated
-                .map(stored -> Response.ok(stored.value()).build())
+                .map(stored -> Response.ok(withKeyCreationTime(stored.value())).build())
                 .orElseGet(() -> armNotFound("storageAccounts/" + id.name()));
     }
 
