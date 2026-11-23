@@ -40,7 +40,8 @@ class ParityConfigTest {
         Map.entry("strict-tokens", ParityLevel.STRICT),
         Map.entry("tenant-scoping", ParityLevel.AZURE),
         Map.entry("strict-search-keys", ParityLevel.STRICT),
-        Map.entry("strict-diagnostic-settings", ParityLevel.STRICT));
+        Map.entry("strict-diagnostic-settings", ParityLevel.STRICT),
+        Map.entry("strict-storage-keys", ParityLevel.STRICT));
 
     private record Override(String name, Predicate<EmulatorConfig> resolver) {
     }
@@ -58,7 +59,8 @@ class ParityConfigTest {
         new Override("strict-tokens", EmulatorConfig::strictTokens),
         new Override("tenant-scoping", EmulatorConfig::tenantScoping),
         new Override("strict-search-keys", EmulatorConfig::strictSearchKeys),
-        new Override("strict-diagnostic-settings", EmulatorConfig::strictDiagnosticSettings));
+        new Override("strict-diagnostic-settings", EmulatorConfig::strictDiagnosticSettings),
+        new Override("strict-storage-keys", EmulatorConfig::strictStorageKeys));
 
     private static EmulatorConfig config(ParityLevel level, Map<String, Boolean> explicit, String authMode) {
         return config(level, explicit, authMode, false);
@@ -93,6 +95,7 @@ class ParityConfigTest {
         when(overrides.tenantScoping()).thenReturn(Optional.ofNullable(explicit.get("tenant-scoping")));
         when(overrides.strictSearchKeys()).thenReturn(Optional.ofNullable(explicit.get("strict-search-keys")));
         when(overrides.strictDiagnosticSettings()).thenReturn(Optional.ofNullable(explicit.get("strict-diagnostic-settings")));
+        when(overrides.strictStorageKeys()).thenReturn(Optional.ofNullable(explicit.get("strict-storage-keys")));
         return config;
     }
 
